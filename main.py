@@ -4,11 +4,11 @@ import time
 import threading
 import subprocess
 from flask import Flask, Response, render_template, request, jsonify
-from helpers import forward, reverse, turnRight, turnLeft, stop, readHumidityAndTemp
+from helpers import forward, reverse, turnRight, turnLeft, stop, readHumidityAndTemp, camera_servo
 
 
 app = Flask(__name__)
-
+camera_current_angle = 0
 sensor_data = {
   "temperature": 0.0,
   "humidity": 0.0,
@@ -149,6 +149,45 @@ def getHumidityReading():
     payload["success"] = True
     
   return jsonify(payload), 200
+
+
+
+@app.route('/camera_tilt', methods=['GET'])
+def tilt_camera():
+  global camera_current_angle
+  direction = request.args.get('direction')
+  step_degrees = 15  # Adjust this value to make the panning faster or slower
+  if not direction:
+    return jsonify({
+      "status": "error", 
+      "message": "Missing 'direction' query parameter."
+    }), 400
+  if direction == "left":
+    camera_current_angle = max(-90, camera_current_angle - step_degrees)
+  elif direction == "right":
+    camera_current_angle = min(90, camera_current_angle + step_degrees)
+  elif direction == "center":
+    camera_current_angle = 0
+  else:
+    return jsonify({
+      "status": "error", 
+      "message": f"Invalid direction '{direction}'. Use 'left', 'right', or 'center'."
+    }), 400
+  try:
+    camera_servo.angle = camera_current_angle
+    time.sleep(0.1)
+    camera_servo.value = None 
+    
+  except Exception as e:
+    return jsonify({
+      "status": "error",
+      "message": f"Hardware error: {str(e)}"
+    }), 500
+
+  return jsonify({
+    "status": "success", 
+    "current_angle": camera_current_angle
+  })
 
 
 if __name__ == '__main__':

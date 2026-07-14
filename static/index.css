@@ -1,0 +1,254 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #121212;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 10px 20px;
+}
+
+.container {
+  width: 100%;
+  max-width: 640px;
+  text-align: center;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin-bottom: 5px;
+  color: #e0e0e0;
+}
+
+.video-box-container {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.video-box {
+  background-color: #000;
+  border: 2px solid #333;
+  border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  width: 60%;
+  margin-bottom: 10px;
+}
+
+img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.control-panel {
+  background-color: #1e1e1e;
+  padding: 25px;
+  border-radius: 12px;
+  border: 1px solid #2d2d2d;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-height: 300px;
+}
+
+.slider-section {
+  margin-bottom: 25px;
+  text-align: left;
+  border-bottom: 1px solid #333;
+  padding-bottom: 20px;
+}
+
+label {
+  display: block;
+  font-size: 1rem;
+  margin-bottom: 10px;
+  color: #b3b3b3;
+}
+
+.info-container {
+  display: flex;
+  /* align-items: ; */
+  justify-content: space-between;
+}
+
+.slider {
+  width: 100%;
+  /* -webkit-appearance: none; */
+  height: 8px;
+  border-radius: 5px;
+  background: #444;
+  outline: none;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #00adb5;
+  cursor: pointer;
+}
+
+.target-display {
+  font-weight: bold;
+  color: #00adb5;
+}
+
+/* Two Button Direction Layout */
+.btn-group {
+  margin-top: 10px;
+  position: relative;
+  height: 60px;
+  width: 60px;
+  border-radius: 30px;
+  background: #3d3d3d;
+}
+
+.btn-group-container {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 55px;
+  margin-bottom: 15px;
+}
+
+.action-btn {
+  flex: 1;
+  /* max-width: 180px; */
+  height: 60px;
+  width: 60px;
+  border-radius: 30px;
+  border: solid 1px #3d3d3d;
+  color: white;
+  font-size: 1rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.05s;
+  background-color: #5a5959;
+}
+
+.forward-btn {
+  /* background: #28a745; */
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+  position: absolute;
+  left: calc(0%);
+  top: -60px;
+}
+
+.reverse-btn {
+  /* box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); */
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+  position: absolute;
+  left: calc(0%);
+  top: 60px;
+}
+
+.right-btn {
+  /* box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); */
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+  position: absolute;
+  right: calc(0% - 60px);
+  top: calc(50% -30px);
+}
+
+.left-btn {
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+  position: absolute;
+  left: calc(0% + -60px);
+  top: calc(50% -30px);
+}
+
+.stop-btn {
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+  position: absolute;
+  left: calc(0px);
+  top: calc(50% -30px);
+}
+
+.action-btn:active {
+  transform: scale(0.96);
+  opacity: 0.9;
+}
+
+.status-display {
+  /* margin-top: 20px; */
+  font-size: 1rem;
+  color: #888888;
+}
+
+.active-status {
+  color: #00fff2;
+  font-weight: bold;
+}
+
+/* camera controls */
+.camera-control-container {
+  background: #1e1e24;
+  color: #ffffff;
+  padding: 15px;
+  border-radius: 8px;
+  text-align: center;
+  max-width: 350px;
+  margin: 15px auto;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  font-family: sans-serif;
+}
+
+.servo-controls {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.btn-servo {
+  flex: 1;
+  background: #00adb5;
+  color: white;
+  border: none;
+  padding: 12px 8px;
+  font-size: 1rem;
+  font-weight: bold;
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    transform 0.1s;
+}
+
+.btn-servo:hover {
+  background: #007c82;
+}
+
+.btn-servo:active {
+  transform: scale(0.95);
+}
+
+.btn-center {
+  background: #393e46;
+}
+
+.btn-center:hover {
+  background: #222831;
+}
+
+.angle-display {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: #eeeeee;
+}

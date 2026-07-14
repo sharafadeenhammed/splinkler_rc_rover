@@ -5,209 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rover Controller</title>
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      background-color: #121212;
-      color: #ffffff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 10px 20px;
-    }
-
-    .container {
-      width: 100%;
-      max-width: 640px;
-      text-align: center;
-    }
-
-    h1 {
-      font-size: 1.6rem;
-      margin-bottom: 5px;
-      color: #e0e0e0;
-    }
-
-    .video-box-container {
-      width: 100%;
-      display: flex;
-      justify-content: center;
-    }
-
-    .video-box {
-      background-color: #000;
-      border: 2px solid #333;
-      border-radius: 12px;
-      overflow: hidden;
-      aspect-ratio: 4 / 3;
-      width: 60%;
-      margin-bottom: 10px;
-    }
-
-    img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    .control-panel {
-      background-color: #1e1e1e;
-      padding: 25px;
-      border-radius: 12px;
-      border: 1px solid #2d2d2d;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-      min-height: 300px
-    }
-
-    .slider-section {
-      margin-bottom: 25px;
-      text-align: left;
-      border-bottom: 1px solid #333;
-      padding-bottom: 20px;
-    }
-
-    label {
-      display: block;
-      font-size: 1rem;
-      margin-bottom: 10px;
-      color: #b3b3b3;
-    }
-
-    .info-container {
-      display: flex;
-      /* align-items: ; */
-      justify-content: space-between;
-    }
-
-    .slider {
-      width: 100%;
-      /* -webkit-appearance: none; */
-      height: 8px;
-      border-radius: 5px;
-      background: #444;
-      outline: none;
-      margin-bottom: 10px;
-      cursor: pointer;
-    }
-
-    .slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: #00adb5;
-      cursor: pointer;
-    }
-
-    .target-display {
-      font-weight: bold;
-      color: #00adb5;
-    }
-
-    /* Two Button Direction Layout */
-    .btn-group {
-      /* display: flex; */
-      /* gap: 20px; */
-      /* justify-content: center; */
-      margin-top: 10px;
-      position: relative;
-      height: 60px;
-      width: 60px;
-      border-radius: 30px;
-      background: #3d3d3d;
-    }
-
-    .btn-group-container {
-      width: 100%;
-      display: flex;
-      justify-content: center;
-      margin-top: 55px;
-      margin-bottom: 15px
-    }
-
-    .action-btn {
-      flex: 1;
-      /* max-width: 180px; */
-      height: 60px;
-      width: 60px;
-      border-radius: 30px;
-      border: solid 1px #3d3d3d;
-      color: white;
-      font-size: 1rem;
-      font-weight: bold;
-      text-transform: uppercase;
-      cursor: pointer;
-      user-select: none;
-      -webkit-user-select: none;
-      outline: none;
-      -webkit-tap-highlight-color: transparent;
-      transition: transform 0.05s;
-      background-color: #5a5959;
-    }
-
-    .forward-btn {
-      /* background: #28a745; */
-      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-      position: absolute;
-      left: calc(0%);
-      top: -60px;
-    }
-
-    .reverse-btn {
-      /* box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); */
-      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-      position: absolute;
-      left: calc(0%);
-      top: 60px;
-    }
-
-    .right-btn {
-      /* box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); */
-      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-      position: absolute;
-      right: calc(0% - 60px);
-      top: calc(50% -30px);
-    }
-
-    .left-btn {
-      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-      position: absolute;
-      left: calc(0% + -60px);
-      top: calc(50% -30px);
-    }
-
-    .stop-btn {
-      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-      position: absolute;
-      left: calc(0px);
-      top: calc(50% -30px);
-    }
-
-    .action-btn:active {
-      transform: scale(0.96);
-      opacity: 0.9;
-    }
-
-
-    .status-display {
-      /* margin-top: 20px; */
-      font-size: 1rem;
-      color: #888888;
-    }
-
-    .active-status {
-      color: #00fff2;
-      font-weight: bold;
-    }
-  </style>
+  <link rel="stylesheet" href="/static/index.css">
 </head>
 
 <body>
@@ -218,9 +16,21 @@
 
     <div class="video-box-container">
       <div class="video-box">
-        <img src="http://192.168.237.181:5000/stream" alt="Live Stream">
+        <img src="http://192.168.161.181:5000/stream" alt="Live Stream">
       </div>
     </div>
+
+    <!-- camera tilt/pan control start -->
+    <div class="camera-control-container">
+      <h3>Camera Pan Control</h3>
+      <div class="servo-controls">
+        <button class="btn-servo" onclick="tiltCamera('left')">◀ Left</button>
+        <button class="btn-servo btn-center" onclick="tiltCamera('center')">Center</button>
+        <button class="btn-servo" onclick="tiltCamera('right')">Right ▶</button>
+      </div>
+      <p class="angle-display">Current Angle: <span id="current-angle">0</span>°</p>
+    </div>
+    <!-- camera tilt/pan control end -->
 
     <div class="control-panel">
       <div class="info-container">
@@ -285,105 +95,7 @@
   </div>
   </div>
 
-  <script>
-    const slider = document.getElementById('speedSlider');
-    const statusTxt = document.getElementById('statusTxt');
-    const targetVal = document.getElementById('targetVal');
-    const forwardBtn = document.getElementById('forwardBtn');
-    const reverseBtn = document.getElementById('reverseBtn');
-    const rightBtn = document.getElementById('rightBtn');
-    const leftBtn = document.getElementById('leftBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const sensorReadings = document.getElementById('sensorReadings');
-
-    const PI_IP = "192.168.237.181";
-
-    let targetSpeed = 50;
-    let activeDirection = null; // Tracks which direction is actively pressed
-
-    slider.oninput = function () {
-      targetSpeed = this.value;
-      targetVal.innerHTML = targetSpeed;
-      if (activeDirection) {
-        sendHardwareCommand(targetSpeed, activeDirection);
-      }
-    }
-
-    function sendHardwareCommand(speed, direction) {
-      fetch(`http://${PI_IP}:5000/motor?speed=${speed}&dir=${direction}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            statusTxt.innerText = data.status;
-            if (speed > 0) {
-              statusTxt.classList.add('active-status');
-            } else {
-              statusTxt.innerText = "STOPPED";
-              statusTxt.classList.remove('active-status');
-            }
-          }
-        })
-        .catch(err => console.error("API error:", err));
-    }
-
-    function fetchSensorData() {
-      fetch(`http://${PI_IP}:5000/sensor_readings`)
-        .then(res => res.json())
-        .then(data => {
-          /*
-          <p style="text-align:left; font-size:12px">Updated at: ${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes()}:${date.getSeconds()}
-          */
-          if (data.success) {
-            // const date = new Date(Date(data.last_updated))
-            sensorReadings.innerHTML = `
-              <p style="text-align:left; font-size:12px">Temp: ${data.temperature} </p>
-              <p style="text-align:left; font-size:12px">Humidity: ${data.humidity} </p>
-              <p style="text-align:left; font-size:12px">Soil: ${data.soil} </p>
-              <p style="text-align:left; font-size:12px">Updated at: ${data.last_updated}
-           </p >
-            `;
-          }
-        })
-        .catch(err => console.error("API error:", err));
-    }
-
-    function setupButton(buttonElement, directionName) {
-      const startAction = (e) => {
-        e.preventDefault();
-        if (!activeDirection) {
-          activeDirection = directionName;
-          sendHardwareCommand(targetSpeed, directionName);
-        }
-      };
-
-      const stopAction = (e) => {
-        e.preventDefault();
-        if (activeDirection === directionName) {
-          activeDirection = null;
-          sendHardwareCommand(0, directionName);
-        }
-      };
-
-      // Mouse events
-      buttonElement.addEventListener('mousedown', startAction);
-      buttonElement.addEventListener('mouseup', stopAction);
-      buttonElement.addEventListener('mouseleave', stopAction);
-
-      // Touch events
-      buttonElement.addEventListener('touchstart', startAction);
-      buttonElement.addEventListener('touchend', stopAction);
-      buttonElement.addEventListener('touchcancel', stopAction);
-    }
-
-    // Bind logic rules to hardware buttons
-    setupButton(forwardBtn, 'forward');
-    setupButton(reverseBtn, 'reverse');
-    setupButton(rightBtn, 'right');
-    setupButton(leftBtn, 'left');
-    setupButton(stopBtn, 'stop');
-
-    setInterval(() => fetchSensorData(), 3000)
-  </script>
+  <script src="/static/index.js"></script>
 </body>
 
 </html>
