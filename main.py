@@ -163,9 +163,9 @@ def tilt_camera():
       "message": "Missing 'direction' query parameter."
     }), 400
   if direction == "left":
-    camera_current_angle = max(-90, camera_current_angle - step_degrees)
+    camera_current_angle = max(-90, camera_current_angle + step_degrees)
   elif direction == "right":
-    camera_current_angle = min(90, camera_current_angle + step_degrees)
+    camera_current_angle = min(90, camera_current_angle - step_degrees)
   elif direction == "center":
     camera_current_angle = 0
   else:
@@ -176,7 +176,8 @@ def tilt_camera():
   try:
     camera_servo.angle = camera_current_angle
     time.sleep(0.1)
-    camera_servo.value = None 
+    # camera_servo.value = None 
+    
     
   except Exception as e:
     return jsonify({
