@@ -1,5 +1,5 @@
-from gpiozero import Button
-from constants import PINOUT, LED
+from gpiozero import Button, LED
+from constants import PINOUT
 
 
 # soil moisture sensor class
