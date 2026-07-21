@@ -1,12 +1,27 @@
-from gpiozero import LED
-from time import sleep
+from helpers import MOISTURE_SENSOR
+# from gpiozero import LED
+# from gpiozero import Button
+# from constants import PINOUT
+from signal import pause
 
-led = LED(17)   # GPIO17 (physical pin 11)
 
-while True:
-    led.on()
-    print("ON")
-    sleep(1)
-    led.off()
-    print("OFF")
-    sleep(1)
+# moistureSensor = Button(PINOUT.PIN18)
+# soilMoistureState = "Dry"
+
+# from time import sleep
+
+# def handleWhenPressed():
+#       # soilMoistureState = "Wet"
+#       print("button pressed, and soil moisture ")
+  
+# def handleWhenReleased():
+#       # soilMoistureState = "Dry"
+#       print("button released, and soil moisture ")
+
+
+print("running test...")
+
+# moistureSensor.when_pressed = handleWhenPressed
+# moistureSensor.when_released = handleWhenReleased
+
+pause()

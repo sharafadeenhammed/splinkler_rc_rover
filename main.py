@@ -4,7 +4,7 @@ import time
 import threading
 import subprocess
 from flask import Flask, Response, render_template, request, jsonify
-from helpers import forward, reverse, turnRight, turnLeft, stop, readHumidityAndTemp, camera_servo
+from helpers import forward, reverse, turnRight, turnLeft, stop, readHumidityAndTemp, camera_servo, MOISTURE_SENSOR
 
 
 app = Flask(__name__)
@@ -144,8 +144,10 @@ def control_motor():
 @app.route("/sensor_readings", methods=['GET'])
 def getHumidityReading():
   payload = {}
+  print("current soil moisture state: ",MOISTURE_SENSOR.soilMoistureState)
   with data_lock:
     payload = sensor_data.copy()
+    payload["soil"] = MOISTURE_SENSOR.soilMoistureState
     payload["success"] = True
     
   return jsonify(payload), 200

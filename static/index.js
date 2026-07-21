@@ -8,7 +8,7 @@ const leftBtn = document.getElementById("leftBtn");
 const stopBtn = document.getElementById("stopBtn");
 const sensorReadings = document.getElementById("sensorReadings");
 
-const PI_IP = "192.168.161.181";
+const PI_IP = "http://192.168.156.181:5000";
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks which direction is actively pressed
@@ -21,7 +21,7 @@ slider.oninput = function () {
   }
 };
 
-const baseURL = `http://${PI_IP}:5000`;
+const baseURL = `${PI_IP}`;
 
 function sendHardwareCommand(speed, direction) {
   fetch(`${baseURL}/motor?speed=${speed}&dir=${direction}`)
@@ -41,7 +41,7 @@ function sendHardwareCommand(speed, direction) {
 }
 
 function fetchSensorData() {
-  fetch(`http://${PI_IP}:5000/sensor_readings`)
+  fetch(`${PI_IP}/sensor_readings`)
     .then((res) => res.json())
     .then((data) => {
       /*
