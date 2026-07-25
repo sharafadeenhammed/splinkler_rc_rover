@@ -29,7 +29,7 @@ def stop():
   LEFT_MOTOR_REVERSE.value = 0
   RIGHT_MOTOR_FORWARD.value = 0
   RIGHT_MOTOR_REVERSE.value = 0
-  sleep(0.1)
+  sleep(0.2)
   
 def forward(speed):
   stop()
