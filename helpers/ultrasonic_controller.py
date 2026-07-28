@@ -7,8 +7,8 @@ pigpio_factory = PiGPIOFactory()
 # Initialize Ultrasonic Sensor (TRIG: PIN31 / GPIO 6, ECHO: PIN32 / GPIO 12)
 try:
     distance_sensor = DistanceSensor(
-        echo=PINOUT.PIN32,
         trigger=PINOUT.PIN31,
+        echo=PINOUT.PIN32,
         max_distance=4.0,
         pin_factory=pigpio_factory
     )
