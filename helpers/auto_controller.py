@@ -8,28 +8,53 @@ from helpers.vision_controller import analyze_visual_edges
 from helpers.ultrasonic_controller import get_distance_cm
 
 auto_mode_active = False
+use_ultrasonic_in_auto = True  # Toggle flag to enable/disable ultrasonic sensor in auto navigation
 auto_thread = None
 auto_lock = threading.Lock()
 
 OBSTACLE_THRESHOLD_CM = 20.0   # 20 cm obstacle threshold
 SOIL_CHECK_INTERVAL_SEC = 10.0  # Check soil moisture every 10s of driving
 
+def enable_ultrasonic_in_auto():
+    global use_ultrasonic_in_auto
+    use_ultrasonic_in_auto = True
+    print("🔊 Ultrasonic sensor ENABLED for Autonomous Navigation.")
+    return True
+
+def disable_ultrasonic_in_auto():
+    global use_ultrasonic_in_auto
+    use_ultrasonic_in_auto = False
+    print("🔇 Ultrasonic sensor DISABLED for Autonomous Navigation.")
+    return False
+
+def toggle_ultrasonic_in_auto():
+    global use_ultrasonic_in_auto
+    if use_ultrasonic_in_auto:
+        return disable_ultrasonic_in_auto()
+    else:
+        return enable_ultrasonic_in_auto()
+
+def is_ultrasonic_enabled_in_auto():
+    return use_ultrasonic_in_auto
+
 def autonomous_routine():
     global auto_mode_active
-    print("🤖 Autonomous Mode Started (Dual Ultrasonic + Pi Zero W Camera Vision).")
+    mode_desc = "Ultrasonic + Vision" if use_ultrasonic_in_auto else "Camera Vision Only"
+    print(f"🤖 Autonomous Mode Started ({mode_desc}).")
     last_soil_check = time.time()
     
     while auto_mode_active:
         try:
-            # 1. Ultrasonic Distance Check
-            dist = get_distance_cm()
+            # 1. Ultrasonic Distance Check (only if enabled in code)
+            dist = get_distance_cm() if use_ultrasonic_in_auto else None
             
             # 2. Pi Zero W Camera Visual Edge Check
             vis_state, left_den, right_den = analyze_visual_edges()
-            print(f"🤖 Auto Loop | Dist: {dist}cm | Vision: {vis_state} (L:{left_den}, R:{right_den})")
+            dist_str = f"{dist}cm" if (use_ultrasonic_in_auto and dist is not None) else "DISABLED"
+            print(f"🤖 Auto Loop | Dist: {dist_str} | Vision: {vis_state} (L:{left_den}, R:{right_den})")
             
-            # 3. Obstacle Avoidance Trigger (Ultrasonic <= 20cm OR Camera Visual Barrier)
-            ultrasonic_obstacle = (dist > 0 and dist <= OBSTACLE_THRESHOLD_CM)
+            # 3. Obstacle Avoidance Trigger
+            ultrasonic_obstacle = (use_ultrasonic_in_auto and dist is not None and dist > 0 and dist <= OBSTACLE_THRESHOLD_CM)
             visual_obstacle = (vis_state != "CLEAR")
             
             if ultrasonic_obstacle or visual_obstacle:
@@ -133,5 +158,9 @@ __all__ = [
     "start_auto_mode",
     "stop_auto_mode",
     "toggle_auto_mode",
-    "is_auto_active"
+    "is_auto_active",
+    "enable_ultrasonic_in_auto",
+    "disable_ultrasonic_in_auto",
+    "toggle_ultrasonic_in_auto",
+    "is_ultrasonic_enabled_in_auto"
 ]

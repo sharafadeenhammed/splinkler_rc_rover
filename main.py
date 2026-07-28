@@ -9,6 +9,7 @@ from helpers import (
     readHumidityAndTemp, camera_servo, sensor_servo, 
     MOISTURE_SENSOR, WATER_PUMP,
     get_distance_cm, set_latest_frame, get_vision_status,
+    enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active
 )
 
@@ -163,11 +164,35 @@ def getHumidityReading():
     payload["pump_active"] = WATER_PUMP.isPumpOn()
     payload["sensor_deployed"] = sensor_servo_deployed
     payload["distance_cm"] = get_distance_cm()
+    payload["ultrasonic_enabled"] = is_ultrasonic_enabled()
     payload["vision_status"] = get_vision_status()
     payload["auto_active"] = is_auto_active()
     payload["success"] = True
     
   return jsonify(payload), 200
+
+
+@app.route('/ultrasonic', methods=['GET', 'POST'])
+def control_ultrasonic():
+  action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
+  
+  if action == "enable":
+    enabled = enable_ultrasonic()
+  elif action == "disable":
+    enabled = disable_ultrasonic()
+  elif action == "toggle" or not action:
+    enabled = toggle_ultrasonic()
+  elif action == "status":
+    enabled = is_ultrasonic_enabled()
+  else:
+    return jsonify({"success": False, "message": f"Invalid action '{action}'."}), 400
+
+  return jsonify({
+    "success": True,
+    "ultrasonic_enabled": enabled,
+    "status": "ENABLED 🔊" if enabled else "DISABLED 🔇"
+  }), 200
+
 
 
 
