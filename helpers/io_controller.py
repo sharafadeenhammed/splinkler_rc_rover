@@ -30,16 +30,33 @@ MOISTURE_SENSOR.moistureSensor.when_released  = MOISTURE_SENSOR.handleWhenReleas
 
 # pump class
 class WATER_PUMP:
-  pump = LED(PINOUT.PIN19)
-  
-  @staticmethod
-  def turnOnPump():
-    pump.on()
-  
-  @staticmethod
-  def turnOffPump():
-    pump.off()
+  pump = LED(PINOUT.PIN22)
+  is_active = False
+
+  @classmethod
+  def turnOnPump(cls):
+    cls.pump.on()
+    cls.is_active = True
+    print("💧 Water Pump TURNED ON")
+    return True
+
+  @classmethod
+  def turnOffPump(cls):
+    cls.pump.off()
+    cls.is_active = False
+    print("⏹️ Water Pump TURNED OFF")
+    return False
+
+  @classmethod
+  def togglePump(cls):
+    if cls.is_active:
+      return cls.turnOffPump()
+    else:
+      return cls.turnOnPump()
+
+  @classmethod
+  def isPumpOn(cls):
+    return cls.is_active
 
 
-
-__all__ = ["MOISTURE_SENSOR", "WATER_PUMP"]
+__all__ = ["MOISTURE_SENSOR", "WATER_PUMP"]

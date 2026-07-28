@@ -4,11 +4,17 @@ import time
 import threading
 import subprocess
 from flask import Flask, Response, render_template, request, jsonify
-from helpers import forward, reverse, turnRight, turnLeft, stop, readHumidityAndTemp, camera_servo, MOISTURE_SENSOR
-
+from helpers import (
+    forward, reverse, turnRight, turnLeft, stop, 
+    readHumidityAndTemp, camera_servo, sensor_servo, 
+    MOISTURE_SENSOR, WATER_PUMP,
+    get_distance_cm, set_latest_frame, get_vision_status,
+    start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active
+)
 
 app = Flask(__name__)
 camera_current_angle = 0
+sensor_servo_deployed = False
 sensor_data = {
   "temperature": 0.0,
   "humidity": 0.0,
@@ -75,6 +81,9 @@ def generate_frames():
                     jpg = buffer[start:end+2]
                     buffer = buffer[end+2:]
                     
+                    # Feed frame to camera vision analyzer
+                    set_latest_frame(jpg)
+
                     # Yield standard multipart frame payload
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + jpg + b'\r\n')
@@ -110,6 +119,10 @@ def home():
 @app.route('/motor', methods=['GET'])
 def control_motor():
     try:
+        # Safety: Disengage auto mode if user manually overrides motor controls
+        if is_auto_active():
+            stop_auto_mode()
+
         speed_percent = int(request.args.get('speed', 0))
         direction = request.args.get('dir', 'forward') # 'forward' or 'backward'
         
@@ -144,14 +157,90 @@ def control_motor():
 @app.route("/sensor_readings", methods=['GET'])
 def getHumidityReading():
   payload = {}
-  print("current soil moisture state: ",MOISTURE_SENSOR.soilMoistureState)
   with data_lock:
     payload = sensor_data.copy()
     payload["soil"] = MOISTURE_SENSOR.soilMoistureState
+    payload["pump_active"] = WATER_PUMP.isPumpOn()
+    payload["sensor_deployed"] = sensor_servo_deployed
+    payload["distance_cm"] = get_distance_cm()
+    payload["vision_status"] = get_vision_status()
+    payload["auto_active"] = is_auto_active()
     payload["success"] = True
     
   return jsonify(payload), 200
 
+
+
+@app.route('/auto_mode', methods=['GET', 'POST'])
+def control_auto_mode():
+  action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
+  
+  if action == "start":
+    active = start_auto_mode()
+  elif action == "stop":
+    active = stop_auto_mode()
+  elif action == "toggle" or not action:
+    active = toggle_auto_mode()
+  elif action == "status":
+    active = is_auto_active()
+  else:
+    return jsonify({"success": False, "message": f"Invalid action '{action}'."}), 400
+
+  return jsonify({
+    "success": True,
+    "auto_active": active,
+    "status": "AUTONOMOUS 🤖" if active else "MANUAL 🎮"
+  }), 200
+
+
+
+@app.route('/deploy_sensor', methods=['GET', 'POST'])
+def deploy_sensor():
+  global sensor_servo_deployed
+  action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
+  
+  if action == "deploy" or (action == "toggle" and not sensor_servo_deployed):
+    sensor_servo.angle = 90
+    sensor_servo_deployed = True
+  elif action == "retract" or (action == "toggle" and sensor_servo_deployed):
+    sensor_servo.angle = -90
+    sensor_servo_deployed = False
+  elif not action:
+    # Toggle default
+    sensor_servo_deployed = not sensor_servo_deployed
+    sensor_servo.angle = 90 if sensor_servo_deployed else -90
+  else:
+    return jsonify({"success": False, "message": f"Invalid action '{action}'. Use 'deploy', 'retract', or 'toggle'."}), 400
+
+  time.sleep(0.1)
+  return jsonify({
+    "success": True,
+    "is_deployed": sensor_servo_deployed,
+    "angle": sensor_servo.angle,
+    "status": "DEPLOYED (90°)" if sensor_servo_deployed else "RETRACTED (-90°)"
+  }), 200
+
+
+@app.route('/water_pump', methods=['GET', 'POST'])
+def control_pump():
+  action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
+  
+  if action == "on":
+    is_active = WATER_PUMP.turnOnPump()
+  elif action == "off":
+    is_active = WATER_PUMP.turnOffPump()
+  elif action == "toggle" or not action:
+    is_active = WATER_PUMP.togglePump()
+  elif action == "status":
+    is_active = WATER_PUMP.isPumpOn()
+  else:
+    return jsonify({"success": False, "message": f"Invalid action '{action}'."}), 400
+
+  return jsonify({
+    "success": True,
+    "pump_active": is_active,
+    "status": "RUNNING 💧" if is_active else "OFF ⏹️"
+  }), 200
 
 
 @app.route('/camera_tilt', methods=['GET'])

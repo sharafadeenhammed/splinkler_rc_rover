@@ -2,253 +2,590 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  background-color: #121212;
-  color: #ffffff;
+html, body {
+  width: 100%;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #090d16;
+  color: #f1f5f9;
+}
+
+/* App Main Layout Frame */
+.app-layout {
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  padding: 10px 14px;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+/* Header */
+.app-header {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 10px 20px;
-}
-
-.container {
-  width: 100%;
-  max-width: 640px;
-  text-align: center;
-}
-
-h1 {
-  font-size: 1.6rem;
-  margin-bottom: 5px;
-  color: #e0e0e0;
-}
-
-.video-box-container {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-}
-
-.video-box {
-  background-color: #000;
-  border: 2px solid #333;
+  background: rgba(30, 41, 59, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px 16px;
   border-radius: 12px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-icon {
+  font-size: 1.3rem;
+}
+
+.brand-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 0.5px;
+}
+
+.header-badges {
+  display: flex;
+  gap: 10px;
+}
+
+.badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+
+.badge span {
+  color: #38bdf8;
+}
+
+/* Dashboard Grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
-  aspect-ratio: 4 / 3;
-  width: 60%;
-  margin-bottom: 10px;
 }
 
-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.control-panel {
-  background-color: #1e1e1e;
-  padding: 25px;
-  border-radius: 12px;
-  border: 1px solid #2d2d2d;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  min-height: 300px;
-}
-
-.slider-section {
-  margin-bottom: 25px;
-  text-align: left;
-  border-bottom: 1px solid #333;
-  padding-bottom: 20px;
-}
-
-label {
-  display: block;
-  font-size: 1rem;
-  margin-bottom: 10px;
-  color: #b3b3b3;
-}
-
-.info-container {
+/* Panel Containers */
+.panel {
+  background: rgba(30, 41, 59, 0.5);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px;
   display: flex;
-  /* align-items: ; */
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+}
+
+/* Video Panel */
+.video-panel {
   justify-content: space-between;
 }
 
-.slider {
-  width: 100%;
-  /* -webkit-appearance: none; */
-  height: 8px;
-  border-radius: 5px;
-  background: #444;
-  outline: none;
-  margin-bottom: 10px;
-  cursor: pointer;
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 22px;
-  height: 22px;
+.panel-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.stream-live-tag {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  background: #ef4444;
   border-radius: 50%;
-  background: #00adb5;
+  box-shadow: 0 0 8px #ef4444;
+  animation: pulse-red 1.2s infinite alternate;
+}
+
+@keyframes pulse-red {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+.video-container {
+  flex: 1;
+  min-height: 0;
+  background: #020617;
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.video-feed {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.camera-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cam-label {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.cam-label strong {
+  color: #38bdf8;
+}
+
+.cam-btn-group {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-cam {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-cam:hover {
+  background: rgba(56, 189, 248, 0.3);
+}
+
+.btn-cam.btn-center {
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+/* Controls Panel */
+.controls-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+/* Telemetry Grid */
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.telemetry-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 8px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-icon {
+  font-size: 1.2rem;
+}
+
+.card-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.card-label {
+  font-size: 0.68rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.card-value {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* Equipment Buttons */
+.equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.btn-tool {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 8px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: left;
+  color: #f1f5f9;
+}
+
+.tool-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+.tool-text {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tool-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.tool-sub {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-sensor.active {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.3);
+}
+
+.btn-sensor.active .tool-title, .btn-sensor.active .tool-sub {
+  color: #4ade80;
+}
+
+.btn-pump.active {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: rgba(6, 182, 212, 0.5);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.3);
+}
+
+.btn-pump.active .tool-title, .btn-pump.active .tool-sub {
+  color: #22d3ee;
+}
+
+.btn-auto.active {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.3);
+  animation: pulse-auto 1.5s infinite alternate;
+}
+
+.btn-auto.active .tool-title, .btn-auto.active .tool-sub {
+  color: #c084fc;
+}
+
+@keyframes pulse-auto {
+  from { box-shadow: 0 0 8px rgba(168, 85, 247, 0.4); }
+  to { box-shadow: 0 0 18px rgba(168, 85, 247, 0.8); }
+}
+
+/* Driving Controls & D-Pad */
+.drive-section {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  justify-content: space-between;
+}
+
+.speed-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.speed-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.speed-value {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.speed-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(51, 65, 85, 0.8);
+  outline: none;
+  -webkit-appearance: none;
   cursor: pointer;
 }
 
-.target-display {
-  font-weight: bold;
-  color: #00adb5;
+.speed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 10px #38bdf8;
+  cursor: pointer;
+  transition: transform 0.1s;
 }
 
-/* Two Button Direction Layout */
-.btn-group {
-  margin-top: 10px;
-  position: relative;
-  height: 60px;
-  width: 60px;
-  border-radius: 30px;
-  background: #3d3d3d;
-}
-
-.btn-group-container {
-  width: 100%;
+/* Cross D-Pad Layout */
+.dpad-container {
   display: flex;
   justify-content: center;
-  margin-top: 55px;
-  margin-bottom: 15px;
+  align-items: center;
+  flex: 1;
+  min-height: 140px;
+}
+
+.dpad-grid {
+  position: relative;
+  width: 150px;
+  height: 150px;
 }
 
 .action-btn {
-  flex: 1;
-  /* max-width: 180px; */
-  height: 60px;
-  width: 60px;
-  border-radius: 30px;
-  border: solid 1px #3d3d3d;
-  color: white;
-  font-size: 1rem;
-  font-weight: bold;
-  text-transform: uppercase;
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(30, 41, 59, 0.9);
+  color: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s ease;
   outline: none;
-  -webkit-tap-highlight-color: transparent;
-  transition: transform 0.05s;
-  background-color: #5a5959;
 }
 
-.forward-btn {
-  /* background: #28a745; */
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-  position: absolute;
-  left: calc(0%);
-  top: -60px;
-}
-
-.reverse-btn {
-  /* box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); */
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-  position: absolute;
-  left: calc(0%);
-  top: 60px;
-}
-
-.right-btn {
-  /* box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); */
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-  position: absolute;
-  right: calc(0% - 60px);
-  top: calc(50% -30px);
-}
-
-.left-btn {
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-  position: absolute;
-  left: calc(0% + -60px);
-  top: calc(50% -30px);
-}
-
-.stop-btn {
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-  position: absolute;
-  left: calc(0px);
-  top: calc(50% -30px);
+.action-btn:hover {
+  background: rgba(56, 189, 248, 0.25);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  transform: scale(1.05);
 }
 
 .action-btn:active {
-  transform: scale(0.96);
-  opacity: 0.9;
-}
-
-.status-display {
-  /* margin-top: 20px; */
-  font-size: 1rem;
-  color: #888888;
-}
-
-.active-status {
-  color: #00fff2;
-  font-weight: bold;
-}
-
-/* camera controls */
-.camera-control-container {
-  background: #1e1e24;
-  color: #ffffff;
-  padding: 15px;
-  border-radius: 8px;
-  text-align: center;
-  max-width: 350px;
-  margin: 15px auto;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-  font-family: sans-serif;
-}
-
-.servo-controls {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.btn-servo {
-  flex: 1;
-  background: #00adb5;
-  color: white;
-  border: none;
-  padding: 12px 8px;
-  font-size: 1rem;
-  font-weight: bold;
-  border-radius: 5px;
-  cursor: pointer;
-  transition:
-    background 0.2s,
-    transform 0.1s;
-}
-
-.btn-servo:hover {
-  background: #007c82;
-}
-
-.btn-servo:active {
   transform: scale(0.95);
 }
 
-.btn-center {
-  background: #393e46;
+.forward-btn {
+  top: 0;
+  left: 52px;
 }
 
-.btn-center:hover {
-  background: #222831;
+.reverse-btn {
+  bottom: 0;
+  left: 52px;
 }
 
-.angle-display {
-  margin-top: 12px;
-  font-size: 0.9rem;
-  color: #eeeeee;
+.left-btn {
+  top: 52px;
+  left: 0;
+}
+
+.right-btn {
+  top: 52px;
+  right: 0;
+}
+
+.stop-btn {
+  top: 52px;
+  left: 52px;
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #ef4444;
+}
+
+.stop-btn:hover {
+  background: rgba(239, 68, 68, 0.4);
+  border-color: #ef4444;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.5);
+}
+
+/* Mobile Responsive Layout (Screen Height Capped 100vh) */
+@media (max-width: 768px) {
+  .app-layout {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .app-header {
+    height: 40px;
+    padding: 4px 10px;
+  }
+
+  .brand-title {
+    font-size: 1rem;
+  }
+
+  .badge {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 8px;
+  }
+
+  .video-panel {
+    height: 36vh;
+    padding: 8px;
+  }
+
+  .camera-bar {
+    padding: 4px 8px;
+  }
+
+  .btn-cam {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+  }
+
+  .controls-panel {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .telemetry-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+
+  .telemetry-card {
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .card-icon {
+    font-size: 1rem;
+  }
+
+  .card-label {
+    font-size: 0.6rem;
+  }
+
+  .card-value {
+    font-size: 0.78rem;
+  }
+
+  .equipment-grid {
+    gap: 6px;
+  }
+
+  .btn-tool {
+    padding: 6px 4px;
+  }
+
+  .tool-title {
+    font-size: 0.72rem;
+  }
+
+  .tool-sub {
+    font-size: 0.65rem;
+  }
+
+  .drive-section {
+    padding: 8px;
+  }
+
+  .dpad-container {
+    min-height: 105px;
+  }
+
+  .dpad-grid {
+    width: 110px;
+    height: 110px;
+  }
+
+  .action-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .forward-btn { top: 0; left: 37px; }
+  .reverse-btn { bottom: 0; left: 37px; }
+  .left-btn { top: 37px; left: 0; }
+  .right-btn { top: 37px; right: 0; }
+  .stop-btn { top: 37px; left: 37px; }
 }

@@ -1,101 +1,148 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Rover Controller</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sprinkler RC Rover Command Center</title>
+  <meta name="description" content="Autonomous & Remote Control Sprinkler Rover Dashboard">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/index.css">
 </head>
-
 <body>
-
-  <div class="container">
-    <br>
-    <br>
-
-    <div class="video-box-container">
-      <div class="video-box">
-        <img src="http://192.168.156.181:5000/stream" alt="Live Stream">
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">🚜</span>
+        <h1 class="brand-title">Rover Command Center</h1>
       </div>
-    </div>
-
-    <!-- camera tilt/pan control start -->
-    <div class="camera-control-container">
-      <h3>Camera Pan Control</h3>
-      <div class="servo-controls">
-        <button class="btn-servo" onclick="tiltCamera('left')">◀ Left</button>
-        <button class="btn-servo btn-center" onclick="tiltCamera('center')">Center</button>
-        <button class="btn-servo" onclick="tiltCamera('right')">Right ▶</button>
+      <div class="header-badges">
+        <div class="badge badge-motor" id="badgeMotor">Motor: <span id="statusTxt">STOPPED</span></div>
+        <div class="badge badge-mode" id="badgeMode">Mode: <span id="modeTxt">MANUAL</span></div>
       </div>
-      <p class="angle-display">Current Angle: <span id="current-angle">0</span>°</p>
-    </div>
-    <!-- camera tilt/pan control end -->
+    </header>
 
-    <div class="control-panel">
-      <div class="info-container">
-        <!-- motot state -->
-        <div style="width: 30%;">
-          <div class="status-display">Motor: <span id="statusTxt">STOPPED</span></div>
+    <!-- Main Dashboard Grid -->
+    <main class="dashboard-grid">
+      
+      <!-- Video Stream & Camera Pan Panel -->
+      <section class="panel video-panel">
+        <div class="panel-header">
+          <span class="panel-title">📹 Live Camera Feed</span>
+          <span class="stream-live-tag"><span class="pulse-dot"></span> LIVE</span>
         </div>
-        <!-- slider container -->
-        <div>
-          <div>
-            <label for="speedSlider">Speed Target Limit</label>
+        <div class="video-container">
+          <img src="/stream" alt="Live Camera Stream" class="video-feed" onerror="this.onerror=null; this.src='http://192.168.156.181:5000/stream';">
+        </div>
+        <div class="camera-bar">
+          <span class="cam-label">Pan Servo: <strong id="current-angle">0</strong>°</span>
+          <div class="cam-btn-group">
+            <button class="btn-cam" onclick="tiltCamera('left')">◀ Left</button>
+            <button class="btn-cam btn-center" onclick="tiltCamera('center')">Center</button>
+            <button class="btn-cam" onclick="tiltCamera('right')">Right ▶</button>
           </div>
-          <input type="range" min="0" max="100" value="50" class="" id="speedSlider">
-          <div>Power Target: <span id="targetVal" class="target-display">50</span>%</div>
         </div>
-        <!-- sensor reading -->
-        <div style="width: 30%;">
-          <p class="status-display">Sensor Readings</p>
-          <div class="status-display" id="sensorReadings"></div>
+      </section>
+
+      <!-- Control & Telemetry Panel -->
+      <section class="panel controls-panel">
+        
+        <!-- Telemetry Cards -->
+        <div class="telemetry-grid">
+          <div class="telemetry-card">
+            <span class="card-icon">🌡️</span>
+            <div class="card-info">
+              <span class="card-label">Temp</span>
+              <span class="card-value" id="valTemp">--</span>
+            </div>
+          </div>
+          <div class="telemetry-card">
+            <span class="card-icon">💧</span>
+            <div class="card-info">
+              <span class="card-label">Humidity</span>
+              <span class="card-value" id="valHumidity">--</span>
+            </div>
+          </div>
+          <div class="telemetry-card">
+            <span class="card-icon">🌱</span>
+            <div class="card-info">
+              <span class="card-label">Soil</span>
+              <span class="card-value" id="valSoil">Dry</span>
+            </div>
+          </div>
+          <div class="telemetry-card">
+            <span class="card-icon">📏</span>
+            <div class="card-info">
+              <span class="card-label">Ahead Dist</span>
+              <span class="card-value" id="valDist">-- cm</span>
+            </div>
+          </div>
+        </div>
+        <!-- Hidden fallback container -->
+        <div id="sensorReadings" style="display:none;"></div>
+
+        <!-- Equipment Toggle Buttons -->
+        <div class="equipment-grid">
+          <button id="sensorDeployBtn" class="btn-tool btn-sensor" onclick="toggleSensorDeploy()">
+            <span class="tool-icon">🌱</span>
+            <div class="tool-text">
+              <span class="tool-title">Sensor Arm</span>
+              <span class="tool-sub" id="sensorStatus">RETRACTED (-90°)</span>
+            </div>
+          </button>
+          <button id="pumpToggleBtn" class="btn-tool btn-pump" onclick="toggleWaterPump()">
+            <span class="tool-icon">💧</span>
+            <div class="tool-text">
+              <span class="tool-title">Water Pump</span>
+              <span class="tool-sub" id="pumpStatus">OFF ⏹️</span>
+            </div>
+          </button>
+          <button id="autoModeBtn" class="btn-tool btn-auto" onclick="toggleAutoMode()">
+            <span class="tool-icon">🤖</span>
+            <div class="tool-text">
+              <span class="tool-title">Auto Mode</span>
+              <span class="tool-sub" id="autoStatus">OFF 🎮</span>
+            </div>
+          </button>
         </div>
 
-      </div>
-      <!-- end of slider -->
-      <div class="btn-group-container">
-        <div class="btn-group">
-          <!-- forward nutton -->
-          <button class="action-btn forward-btn" id="forwardBtn">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-              <path d="M12 4l-8 8h6v8h4v-8h6l-8-8z" />
-            </svg>
-          </button>
-          <!-- reverse button -->
-          <button class="action-btn reverse-btn" id="reverseBtn">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-              <path d="M12 20l8-8h-6V4h-4v8H4l8 8z" />
-            </svg>
-          </button>
-          <!-- right button -->
-          <button class="action-btn right-btn" id="rightBtn">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-              <path d="M20 12l-8-8v6H4v4h8v6l8-8z" />
-            </svg>
-          </button>
-          <!-- left button -->
-          <button class="action-btn left-btn" id="leftBtn">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-              <path d="M4 12l8-8v6h8v4h-8v6l-8-8z" />
-            </svg>
-          </button>
+        <!-- Driving Speed & D-Pad Section -->
+        <div class="drive-section">
+          <div class="speed-control">
+            <div class="speed-header">
+              <label for="speedSlider">Speed Target Limit</label>
+              <span class="speed-value"><span id="targetVal">50</span>%</span>
+            </div>
+            <input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider">
+          </div>
 
-          <!-- stop button -->
-          <button class="action-btn stop-btn" id="stopBtn">
-            <svg width="20" height="20" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-              <rect width="100" height="100" fill="currentColor" />
-            </svg>
-          </button>
+          <div class="dpad-container">
+            <div class="dpad-grid">
+              <button class="action-btn forward-btn" id="forwardBtn" title="Forward (ArrowUp / W)">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l-8 8h6v8h4v-8h6l-8-8z"/></svg>
+              </button>
+              <button class="action-btn left-btn" id="leftBtn" title="Left (ArrowLeft / A)">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 12l8-8v6h8v4h-8v6l-8-8z"/></svg>
+              </button>
+              <button class="action-btn stop-btn" id="stopBtn" title="Emergency Stop (Space)">
+                <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+              </button>
+              <button class="action-btn right-btn" id="rightBtn" title="Right (ArrowRight / D)">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 12l-8-8v6H4v4h8v6l8-8z"/></svg>
+              </button>
+              <button class="action-btn reverse-btn" id="reverseBtn" title="Reverse (ArrowDown / S)">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 20l8-8h-6V4h-4v8H4l8 8z"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-      <!-- end of button group -->
 
-    </div>
-  </div>
+      </section>
+    </main>
   </div>
 
   <script src="/static/index.js"></script>
 </body>
-
 </html>
