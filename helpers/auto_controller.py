@@ -64,17 +64,17 @@ def autonomous_routine():
                 time.sleep(0.2)
                 
                 # Reverse slightly
-                reverse(0.4)
+                reverse(1)
                 time.sleep(0.4)
                 stop()
                 
                 # Turn towards whichever direction has fewer visual obstacles
                 if vis_state == "OBSTACLE_LEFT":
                     print("↪️ Turning RIGHT to avoid left visual barrier...")
-                    turnRight(0.5)
+                    turnRight(1)
                 else:
                     print("↩️ Turning LEFT to avoid right visual barrier...")
-                    turnLeft(0.5)
+                    turnLeft(1)
                     
                 time.sleep(0.7)
                 stop()
@@ -112,7 +112,7 @@ def autonomous_routine():
                 continue
             
             # 5. Normal Drive Forward
-            forward(0.4)
+            forward(1)
             time.sleep(0.3)
             
         except Exception as e:
