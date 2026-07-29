@@ -225,7 +225,7 @@ def deploy_sensor():
   action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
   
   if action == "deploy" or (action == "toggle" and not sensor_servo_deployed):
-    sensor_servo.angle = 90
+    sensor_servo.angle = 70
     sensor_servo_deployed = True
   elif action == "retract" or (action == "toggle" and sensor_servo_deployed):
     sensor_servo.angle = -90
@@ -233,7 +233,7 @@ def deploy_sensor():
   elif not action:
     # Toggle default
     sensor_servo_deployed = not sensor_servo_deployed
-    sensor_servo.angle = 90 if sensor_servo_deployed else -90
+    sensor_servo.angle = 70 if sensor_servo_deployed else -90
   else:
     return jsonify({"success": False, "message": f"Invalid action '{action}'. Use 'deploy', 'retract', or 'toggle'."}), 400
 
