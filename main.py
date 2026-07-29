@@ -30,7 +30,7 @@ def read_sensor_loop():
     try:
       # 1. Fetch hardware telemetry data
       temp, humidity = readHumidityAndTemp()
-      if temp or humidity: print("temp: ", temp, "  humidity: ", humidity)
+      # if temp or humidity: print("temp: ", temp, "  humidity: ", humidity)
             
       # 2. Safely commit the new values to memory using a lock
       with data_lock:
