@@ -89,7 +89,7 @@ def autonomous_routine():
                 time.sleep(0.3)
                 
                 # Deploy sensor arm (90 deg)
-                sensor_servo.angle = 70
+                sensor_servo.angle = -20
                 time.sleep(1.2)
                 
                 soil_state = MOISTURE_SENSOR.getSoilMoistureState()
