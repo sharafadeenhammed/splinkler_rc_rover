@@ -19,7 +19,7 @@ sensor_servo = AngularServo(
     pin_factory=pigpioFactory,
     initial_angle=-90,
     min_angle=-90,
-    max_angle=70,
+    max_angle=90,
 )
 
 __all__ = ["camera_servo", "sensor_servo"]
