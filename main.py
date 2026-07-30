@@ -242,7 +242,7 @@ def deploy_sensor():
     "success": True,
     "is_deployed": sensor_servo_deployed,
     "angle": sensor_servo.angle,
-    "status": "DEPLOYED (90°)" if sensor_servo_deployed else "RETRACTED (-90°)"
+    "status": "DEPLOYED (-20°)" if sensor_servo_deployed else "RETRACTED (-90°)"
   }), 200
 
 

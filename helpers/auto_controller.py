@@ -86,8 +86,10 @@ def autonomous_routine():
             if now - last_soil_check >= SOIL_CHECK_INTERVAL_SEC:
                 print("🌱 Stopping for periodic soil moisture check...")
                 stop()
-                time.sleep(0.3)
-                
+                WATER_PUMP.turnOffPump()
+                time.sleep(1.5) # wait for remaining water in the pipeline to drip out 
+                forward() # move forward a bit to avoid the moisture sensor from picking up dripped out water
+                time.sleep(0.5)
                 # Deploy sensor arm (90 deg)
                 sensor_servo.angle = -20
                 time.sleep(1.2)
@@ -98,13 +100,13 @@ def autonomous_routine():
                 if soil_state.lower() == "dry":
                     print("💧 Soil DRY -> Activating Water Pump for 3 seconds...")
                     WATER_PUMP.turnOnPump()
-                    pump_start = time.time()
-                    while time.time() - pump_start < 3.0 and auto_mode_active:
-                        time.sleep(0.2)
-                    WATER_PUMP.turnOffPump()
+                    # pump_start = time.time()
+                    # while time.time() - pump_start < 3.0 and auto_mode_active:
+                        # time.sleep(0.2)
+                    # WATER_PUMP.turnOffPump()
                 else:
                     print("✅ Soil WET -> Skipping pump.")
-                
+                    WATER_PUMP.turnOffPump()                
                 # Retract sensor arm (-90 deg)
                 sensor_servo.angle = -90
                 time.sleep(0.8)
