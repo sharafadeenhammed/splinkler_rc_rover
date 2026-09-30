@@ -8,6 +8,7 @@ from bluez_peripheral.util import get_message_bus, Adapter
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 WIFI_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 CONTROL_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
+IP_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef3"
 
 
 def set_wifi_credentials(ssid, password):
@@ -32,6 +33,15 @@ def control_app(action):
     elif action_str == "STOP":
         subprocess.run(["sudo", "systemctl", "stop", "rover.service"])
         print("[BLE] Stopped rover.service")
+
+
+def get_ip_address():
+    try:
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5).stdout.split()
+        ipv4 = [ip for ip in out if "." in ip]
+        return ipv4[0] if ipv4 else ""
+    except Exception:
+        return ""
 
 
 class RoverService(Service):
@@ -59,6 +69,10 @@ class RoverService(Service):
         command = bytes(value).decode("utf-8").strip()
         print(f"[BLE] Received App Command: {command}")
         control_app(command)
+        
+    @characteristic(IP_CHAR_UUID, CharacteristicFlags.READ)
+    def ip_char(self, options):
+        return get_ip_address().encode("utf-8")
 
 
 async def main():

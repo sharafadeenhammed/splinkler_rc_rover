@@ -373,6 +373,7 @@
                     autocomplete="off">
                 <span class="port">:5000</span>
             </div>
+            <button id="btn-getip" class="btn btn-ghost needs-conn" disabled>Get IP from rover</button>
             <button id="btn-open" class="btn btn-primary" disabled>Open rover server</button>
         </div>
 
@@ -563,6 +564,34 @@
             $("btn-open").disabled = !url;
             $("btn-open").textContent = url ? "Open " + url : "Open rover server";
         }
+
+        const IP_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef3";
+
+        async function fetchServerIp() {
+            const btn = $("btn-getip");
+            btn.disabled = true;
+            try {
+                log("Asking rover for its IP address…");
+                const ch = await bleService.getCharacteristic(IP_CHAR_UUID);
+                const value = await ch.readValue();
+                const ip = new TextDecoder().decode(value).trim();
+                if (IPV4.test(ip)) {
+                    $("server-ip").value = ip;
+                    try { localStorage.setItem("roverServerIp", ip); } catch (e) { }
+                    updateServerUI();
+                    log("Rover IP: " + ip, "success");
+                } else {
+                    log("Rover has no IP address yet. Wait a few seconds after Wi-Fi connects, then try again.", "warn");
+                }
+            } catch (err) {
+                log(err.name === "NotFoundError"
+                    ? "IP characteristic not found. Add it to bt.py and restart the script."
+                    : "IP error: " + err.message, "error");
+            } finally {
+                btn.disabled = state !== "connected";
+            }
+        }
+        $("btn-getip").addEventListener("click", fetchServerIp);
 
         try { $("server-ip").value = localStorage.getItem("roverServerIp") || ""; } catch (e) { }
         updateServerUI();
