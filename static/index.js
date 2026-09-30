@@ -13,65 +13,213 @@ const valHumidity = document.getElementById("valHumidity");
 const valSoil = document.getElementById("valSoil");
 const valDist = document.getElementById("valDist");
 const modeTxt = document.getElementById("modeTxt");
+const wsStatusTxt = document.getElementById("wsStatusTxt");
 
-// Use current page origin for dynamic IP support
+// Dynamic base URLs
 const baseURL = window.location.origin;
+const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+const wsURL = `${wsProtocol}//${window.location.host}/ws`;
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
 
-if (slider) {
-  slider.oninput = function () {
-    targetSpeed = this.value;
-    if (targetVal) targetVal.innerHTML = targetSpeed;
-    if (activeDirection) {
-      sendHardwareCommand(targetSpeed, activeDirection);
+// WebSocket state
+let ws = null;
+let wsConnected = false;
+let reconnectTimer = null;
+let heartbeatInterval = null;
+let httpPollInterval = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY_MS = 5000;
+
+// ----------------- Connection Badge & State -----------------
+
+function updateConnectionBadge(state, text) {
+  if (!wsStatusTxt) return;
+  if (state === "connected") {
+    wsStatusTxt.innerText = text || "ONLINE ⚡";
+    wsStatusTxt.className = "connected";
+  } else if (state === "connecting") {
+    wsStatusTxt.innerText = text || "CONNECTING 🔄";
+    wsStatusTxt.className = "connecting";
+  } else {
+    wsStatusTxt.innerText = text || "OFFLINE ⚠️";
+    wsStatusTxt.className = "disconnected";
+  }
+}
+
+// ----------------- WebSocket Engine & Reconnection -----------------
+
+function initWebSocket() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  updateConnectionBadge("connecting", reconnectAttempts > 0 ? `RETRY #${reconnectAttempts} 🔄` : "CONNECTING ⚡");
+  console.log(`[WS] Attempting connection to ${wsURL}...`);
+
+  try {
+    ws = new WebSocket(wsURL);
+  } catch (err) {
+    console.error("[WS] Initialization error:", err);
+    scheduleReconnect();
+    return;
+  }
+
+  ws.onopen = () => {
+    console.log("⚡ [WS] Connected to rover successfully.");
+    wsConnected = true;
+    reconnectAttempts = 0;
+    updateConnectionBadge("connected", "ONLINE ⚡");
+
+    // Stop fallback HTTP polling when WebSocket is live
+    ensureHttpPolling(false);
+
+    // Request initial telemetry immediately on connect/reconnect
+    sendWSCommand({ type: "get_status" });
+
+    // Start client heartbeat ping every 2s
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        sendWSCommand({ type: "ping" });
+      }
+    }, 2000);
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+
+      if (msg.type === "telemetry" && msg.data) {
+        renderTelemetry(msg.data);
+      } else if (msg.type === "connection_ack" && msg.data) {
+        console.log("⚡ [WS] Hardware state synchronized after connect/reconnect.");
+        renderTelemetry(msg.data);
+      } else if (msg.type === "response") {
+        if (msg.status && statusTxt) {
+          statusTxt.innerText = msg.status;
+        }
+        if (msg.telemetry) {
+          renderTelemetry(msg.telemetry);
+        }
+      }
+    } catch (err) {
+      console.warn("[WS] Error parsing incoming message:", err, event.data);
     }
+  };
+
+  ws.onerror = (err) => {
+    console.warn("⚠️ [WS] Connection error:", err);
+  };
+
+  ws.onclose = (event) => {
+    console.warn(`🔌 [WS] Disconnected (code: ${event.code}). Server stopped rover actions.`);
+    handleDisconnect();
   };
 }
 
-function sendHardwareCommand(speed, direction) {
-  fetch(`${baseURL}/motor?speed=${speed}&dir=${direction}`)
-    .then((res) => res.json())
-    .then((data) => {
-      if (data.success) {
-        if (statusTxt) statusTxt.innerText = data.status;
-      }
-    })
-    .catch((err) => console.error("Motor API error:", err));
+function handleDisconnect() {
+  wsConnected = false;
+  clearInterval(heartbeatInterval);
+
+  // Safety: Rover server immediately halts on disconnect; synchronize client UI
+  activeDirection = null;
+  if (statusTxt) statusTxt.innerText = "STOPPED (SAFE)";
+
+  updateConnectionBadge("connecting", "RECONNECTING 🔄");
+
+  // Enable HTTP polling fallback while WebSocket is down
+  ensureHttpPolling(true);
+
+  scheduleReconnect();
 }
 
-function fetchSensorData() {
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectAttempts++;
+  const delay = Math.min(1000 * Math.pow(1.4, reconnectAttempts - 1), MAX_RECONNECT_DELAY_MS);
+  console.log(`[WS] Scheduling reconnect attempt #${reconnectAttempts} in ${Math.round(delay)}ms...`);
+  reconnectTimer = setTimeout(initWebSocket, delay);
+}
+
+function sendWSCommand(payload) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify(payload));
+      return true;
+    } catch (e) {
+      console.error("[WS] Send error:", e);
+      return false;
+    }
+  }
+  return false;
+}
+
+// ----------------- HTTP Polling Fallback -----------------
+
+function ensureHttpPolling(enable) {
+  if (enable) {
+    if (!httpPollInterval) {
+      console.log("📡 Enabling HTTP telemetry polling fallback...");
+      httpPollInterval = setInterval(fetchSensorDataHttp, 2500);
+      fetchSensorDataHttp();
+    }
+  } else {
+    if (httpPollInterval) {
+      console.log("📡 Disabling HTTP polling: WebSocket is active.");
+      clearInterval(httpPollInterval);
+      httpPollInterval = null;
+    }
+  }
+}
+
+function fetchSensorDataHttp() {
   fetch(`${baseURL}/sensor_readings`)
     .then((res) => res.json())
     .then((data) => {
       if (data.success) {
-        if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
-        if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
-        if (valSoil) valSoil.innerText = data.soil || 'Dry';
-        if (valDist) valDist.innerText = data.distance_cm !== undefined ? `${data.distance_cm} cm` : '--';
-        
-        if (sensorReadings) {
-          sensorReadings.innerHTML = `
-            <p>Temp: ${data.temperature}°C</p>
-            <p>Humidity: ${data.humidity}%</p>
-            <p>Soil: ${data.soil}</p>
-            <p>Dist: ${data.distance_cm}cm</p>
-          `;
-        }
-
-        if (data.pump_active !== undefined) {
-          updatePumpUI(data.pump_active);
-        }
-        if (data.sensor_deployed !== undefined) {
-          updateSensorUI(data.sensor_deployed);
-        }
-        if (data.auto_active !== undefined) {
-          updateAutoUI(data.auto_active);
-        }
+        renderTelemetry(data);
       }
     })
-    .catch((err) => console.error("Sensor API error:", err));
+    .catch((err) => console.warn("HTTP Telemetry fetch error:", err));
+}
+
+// ----------------- Telemetry Renderer -----------------
+
+function renderTelemetry(data) {
+  if (!data) return;
+
+  if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
+  if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
+  if (valSoil) valSoil.innerText = data.soil || 'Dry';
+  if (valDist) valDist.innerText = data.distance_cm !== undefined ? `${data.distance_cm} cm` : '--';
+
+  if (sensorReadings) {
+    sensorReadings.innerHTML = `
+      <p>Temp: ${data.temperature}°C</p>
+      <p>Humidity: ${data.humidity}%</p>
+      <p>Soil: ${data.soil}</p>
+      <p>Dist: ${data.distance_cm}cm</p>
+    `;
+  }
+
+  if (data.pump_active !== undefined) {
+    updatePumpUI(data.pump_active);
+  }
+  if (data.sensor_deployed !== undefined) {
+    updateSensorUI(data.sensor_deployed);
+  }
+  if (data.auto_active !== undefined) {
+    updateAutoUI(data.auto_active);
+  }
+  if (data.motor_status !== undefined && statusTxt) {
+    statusTxt.innerText = data.motor_status;
+  }
+  if (data.camera_angle !== undefined) {
+    const angleElem = document.getElementById("current-angle");
+    if (angleElem) angleElem.innerText = data.camera_angle;
+  }
 }
 
 function updateSensorUI(isDeployed) {
@@ -79,7 +227,7 @@ function updateSensorUI(isDeployed) {
   const sensorBtn = document.getElementById("sensorDeployBtn");
   if (sensorStatus && sensorBtn) {
     if (isDeployed) {
-      sensorStatus.innerText = "DEPLOYED (90°)";
+      sensorStatus.innerText = "DEPLOYED (-20°)";
       sensorBtn.classList.add("active");
     } else {
       sensorStatus.innerText = "RETRACTED (-90°)";
@@ -118,40 +266,84 @@ function updateAutoUI(isAutoActive) {
   }
 }
 
-async function toggleSensorDeploy() {
-  try {
-    const response = await fetch(`${baseURL}/deploy_sensor?action=toggle`);
-    const data = await response.json();
-    if (data.success) {
-      updateSensorUI(data.is_deployed);
-    }
-  } catch (error) {
-    console.error("Network error toggling sensor deploy:", error);
+// ----------------- Command Handlers (WS with HTTP Fallback) -----------------
+
+function sendHardwareCommand(speed, direction) {
+  const payload = { type: "motor", speed: speed, dir: direction };
+  const sent = sendWSCommand(payload);
+
+  if (!sent) {
+    // HTTP Fallback
+    fetch(`${baseURL}/motor?speed=${speed}&dir=${direction}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && statusTxt) statusTxt.innerText = data.status;
+      })
+      .catch((err) => console.error("Motor HTTP fallback error:", err));
   }
 }
 
-async function toggleWaterPump() {
-  try {
-    const response = await fetch(`${baseURL}/water_pump?action=toggle`);
-    const data = await response.json();
-    if (data.success) {
-      updatePumpUI(data.pump_active);
-    }
-  } catch (error) {
-    console.error("Network error toggling water pump:", error);
+function toggleSensorDeploy(action = "toggle") {
+  const sent = sendWSCommand({ type: "sensor_deploy", action: action });
+  if (!sent) {
+    fetch(`${baseURL}/deploy_sensor?action=${action}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) updateSensorUI(data.is_deployed);
+      })
+      .catch((err) => console.error("Sensor deploy HTTP error:", err));
   }
 }
 
-async function toggleAutoMode() {
-  try {
-    const response = await fetch(`${baseURL}/auto_mode?action=toggle`);
-    const data = await response.json();
-    if (data.success) {
-      updateAutoUI(data.auto_active);
-    }
-  } catch (error) {
-    console.error("Network error toggling auto mode:", error);
+function toggleWaterPump(action = "toggle") {
+  const sent = sendWSCommand({ type: "pump", action: action });
+  if (!sent) {
+    fetch(`${baseURL}/water_pump?action=${action}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) updatePumpUI(data.pump_active);
+      })
+      .catch((err) => console.error("Water pump HTTP error:", err));
   }
+}
+
+function toggleAutoMode(action = "toggle") {
+  const sent = sendWSCommand({ type: "auto_mode", action: action });
+  if (!sent) {
+    fetch(`${baseURL}/auto_mode?action=${action}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) updateAutoUI(data.auto_active);
+      })
+      .catch((err) => console.error("Auto mode HTTP error:", err));
+  }
+}
+
+function tiltCamera(direction) {
+  const sent = sendWSCommand({ type: "camera_tilt", direction: direction });
+  if (!sent) {
+    fetch(`${baseURL}/camera_tilt?direction=${direction}`)
+      .then((res) => res.json())
+      .then((data) => {
+        const angleElem = document.getElementById("current-angle");
+        if (angleElem && data.current_angle !== undefined) {
+          angleElem.innerText = data.current_angle;
+        }
+      })
+      .catch((err) => console.error("Camera tilt HTTP error:", err));
+  }
+}
+
+// ----------------- Slider & Input Controls -----------------
+
+if (slider) {
+  slider.oninput = function () {
+    targetSpeed = this.value;
+    if (targetVal) targetVal.innerHTML = targetSpeed;
+    if (activeDirection) {
+      sendHardwareCommand(targetSpeed, activeDirection);
+    }
+  };
 }
 
 function setupButton(buttonElement, directionName) {
@@ -169,22 +361,19 @@ function setupButton(buttonElement, directionName) {
     e.preventDefault();
     if (activeDirection === directionName) {
       activeDirection = null;
-      sendHardwareCommand(0, directionName);
+      sendHardwareCommand(0, "stop");
     }
   };
 
-  // Mouse events
   buttonElement.addEventListener("mousedown", startAction);
   buttonElement.addEventListener("mouseup", stopAction);
   buttonElement.addEventListener("mouseleave", stopAction);
 
-  // Touch events
   buttonElement.addEventListener("touchstart", startAction);
   buttonElement.addEventListener("touchend", stopAction);
   buttonElement.addEventListener("touchcancel", stopAction);
 }
 
-// Bind logic rules to hardware buttons
 setupButton(forwardBtn, "forward");
 setupButton(reverseBtn, "reverse");
 setupButton(rightBtn, "right");
@@ -198,27 +387,12 @@ if (stopBtn) {
   });
 }
 
-// Camera pan tilt
-async function tiltCamera(direction) {
-  try {
-    const response = await fetch(`${baseURL}/camera_tilt?direction=${direction}`);
-    const data = await response.json();
-
-    if (response.ok) {
-      const angleElem = document.getElementById("current-angle");
-      if (angleElem) angleElem.innerText = data.current_angle;
-    }
-  } catch (error) {
-    console.error("Network error adjusting camera:", error);
-  }
-}
-
 // Keyboard shortcuts for Desktop
 document.addEventListener("keydown", (event) => {
   if (document.activeElement.tagName === "INPUT") return;
 
   const key = event.key.toLowerCase();
-  
+
   if (key === "arrowup" || key === "w") {
     if (!activeDirection) {
       activeDirection = "forward";
@@ -256,7 +430,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("keyup", (event) => {
   if (document.activeElement.tagName === "INPUT") return;
   const key = event.key.toLowerCase();
-  
+
   if (
     (key === "arrowup" || key === "w") && activeDirection === "forward" ||
     (key === "arrowdown" || key === "s") && activeDirection === "reverse" ||
@@ -268,7 +442,24 @@ document.addEventListener("keyup", (event) => {
   }
 });
 
-// Telemetry Polling Loop
-setInterval(() => fetchSensorData(), 2000);
-// Initial fetch
-fetchSensorData();
+// Safety: Halt movement if window loses focus or before page unloads
+window.addEventListener("blur", () => {
+  if (activeDirection) {
+    activeDirection = null;
+    sendHardwareCommand(0, "stop");
+  }
+});
+
+window.addEventListener("beforeunload", () => {
+  if (activeDirection) {
+    sendHardwareCommand(0, "stop");
+  }
+  if (ws) {
+    try {
+      ws.close();
+    } catch (_) {}
+  }
+});
+
+// Initialize WebSocket on page load
+initWebSocket();

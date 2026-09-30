@@ -80,6 +80,18 @@ html, body {
   color: #38bdf8;
 }
 
+.badge-ws span.connected {
+  color: #10b981;
+}
+
+.badge-ws span.disconnected {
+  color: #f43f5e;
+}
+
+.badge-ws span.connecting {
+  color: #f59e0b;
+}
+
 /* Dashboard Grid */
 .dashboard-grid {
   display: grid;
