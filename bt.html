@@ -243,6 +243,28 @@
             color: var(--text);
         }
 
+        .ip-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .ip-row input {
+            margin: 0;
+            flex: 1;
+        }
+
+        .ip-row .port {
+            padding: 12px;
+            background: var(--inset);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--sub);
+            font-size: .9rem;
+            font-variant-numeric: tabular-nums;
+        }
+
         .btn-grid {
             display: flex;
             gap: 10px;
@@ -339,6 +361,19 @@
                 <button type="button" class="pass-toggle" id="pass-toggle">Show</button>
             </div>
             <button id="btn-wifi" class="btn btn-primary needs-conn" disabled>Send Wi-Fi credentials</button>
+        </div>
+
+        <!-- Server -->
+        <div class="section">
+            <div class="section-head">
+                <h3 class="section-title">Rover server</h3>
+            </div>
+            <div class="ip-row">
+                <input type="text" id="server-ip" placeholder="Server IP, e.g. 192.168.1.50" inputmode="decimal"
+                    autocomplete="off">
+                <span class="port">:5000</span>
+            </div>
+            <button id="btn-open" class="btn btn-primary" disabled>Open rover server</button>
         </div>
 
         <!-- Service -->
@@ -513,6 +548,34 @@
             const show = $("wifi-pass").type === "password";
             $("wifi-pass").type = show ? "text" : "password";
             $("pass-toggle").textContent = show ? "Hide" : "Show";
+        });
+
+        /* ---------- Server IP (port fixed at 5000) ---------- */
+        const SERVER_PORT = 5000;
+        const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+        function serverUrl() {
+            const ip = $("server-ip").value.trim();
+            return IPV4.test(ip) ? "http://" + ip + ":" + SERVER_PORT : null;
+        }
+        function updateServerUI() {
+            const url = serverUrl();
+            $("btn-open").disabled = !url;
+            $("btn-open").textContent = url ? "Open " + url : "Open rover server";
+        }
+
+        try { $("server-ip").value = localStorage.getItem("roverServerIp") || ""; } catch (e) { }
+        updateServerUI();
+
+        $("server-ip").addEventListener("input", () => {
+            updateServerUI();
+            try { localStorage.setItem("roverServerIp", $("server-ip").value.trim()); } catch (e) { }
+        });
+        $("btn-open").addEventListener("click", () => {
+            const url = serverUrl();
+            if (!url) return;
+            log("Opening " + url, "info");
+            window.open(url, "_blank", "noopener");
         });
 
         log('Ready. Tap "Connect to Rover" to scan.', "muted");

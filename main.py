@@ -53,7 +53,7 @@ def generate_frames():
         '-o', '-',              # Output directly to stdout pipe
         '--width', '640',       # Balanced resolution
         '--height', '480',
-        '--framerate', '30',    # Cap at 15 FPS for smooth network throughput
+        '--framerate', '15',    # Cap at 15 FPS for smooth network throughput
         '-n'                    # Suppress local desktop preview window
     ]
     
