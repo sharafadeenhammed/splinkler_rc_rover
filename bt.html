@@ -1,109 +1,246 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Rover BLE Dashboard</title>
     <style>
         :root {
-            --bg-color: #0f111a;
-            --card-bg: #1e2130;
-            --accent-blue: #00adb5;
-            --accent-green: #2ecc71;
-            --accent-red: #e74c3c;
-            --text-main: #ffffff;
-            --text-sub: #a0a5b5;
-            --border-color: #2e344e;
+            --bg: #0f111a;
+            --card: #1e2130;
+            --inset: #141622;
+            --border: #2e344e;
+            --text: #fff;
+            --sub: #a0a5b5;
+            --blue: #00adb5;
+            --green: #2ecc71;
+            --red: #e74c3c;
+            --amber: #f5a623;
+        }
+
+        * {
+            box-sizing: border-box;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
             margin: 0;
             padding: 20px;
             display: flex;
             justify-content: center;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
 
         .container {
             width: 100%;
             max-width: 420px;
-            background-color: var(--card-bg);
-            border-radius: 12px;
             padding: 24px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-            border: 1px solid var(--border-color);
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
         }
 
         h2 {
-            margin-top: 0;
+            margin: 0 0 16px;
             font-size: 1.4rem;
             text-align: center;
-            color: var(--accent-blue);
+            color: var(--blue);
         }
 
-        .status-badge {
-            display: block;
-            text-align: center;
-            padding: 8px;
-            border-radius: 20px;
-            font-size: 0.85rem;
-            font-weight: bold;
-            margin: 15px 0;
-            transition: all 0.3s ease;
+        /* Connection indicator */
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid var(--c);
+            background: color-mix(in srgb, var(--c) 14%, transparent);
+            transition: background .3s, border-color .3s;
         }
 
-        .disconnected { background-color: rgba(231, 76, 60, 0.2); color: var(--accent-red); border: 1px solid var(--accent-red); }
-        .connected { background-color: rgba(46, 204, 113, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+        .status[data-state="disconnected"] {
+            --c: var(--red);
+        }
+
+        .status[data-state="connecting"] {
+            --c: var(--amber);
+        }
+
+        .status[data-state="connected"] {
+            --c: var(--green);
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--c);
+            flex: none;
+        }
+
+        .status[data-state="connecting"] .dot,
+        .status[data-state="connected"] .dot {
+            animation: pulse 1.6s ease-out infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 70%, transparent);
+            }
+
+            100% {
+                box-shadow: 0 0 0 10px transparent;
+            }
+        }
+
+        .status-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        #status-label {
+            font-weight: 700;
+            color: var(--c);
+            font-size: .95rem;
+        }
+
+        #status-detail {
+            font-size: .78rem;
+            color: var(--sub);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #uptime {
+            font-variant-numeric: tabular-nums;
+            font-size: .85rem;
+            color: var(--sub);
+        }
 
         .btn {
             width: 100%;
             padding: 12px;
-            border: none;
+            margin-top: 8px;
+            border: 0;
             border-radius: 6px;
-            font-size: 0.95rem;
-            font-weight: bold;
+            font-size: .95rem;
+            font-weight: 700;
+            color: #fff;
             cursor: pointer;
-            transition: transform 0.1s, background-color 0.2s;
-            margin-top: 6px;
+            transition: transform .1s, background-color .2s, opacity .2s;
         }
 
-        .btn:active { transform: scale(0.98); }
-        .btn-primary { background-color: var(--accent-blue); color: #fff; }
-        .btn-primary:hover { background-color: #008c93; }
-        .btn-success { background-color: var(--accent-green); color: #fff; }
-        .btn-danger { background-color: var(--accent-red); color: #fff; }
+        .btn:active:not(:disabled) {
+            transform: scale(.98);
+        }
+
+        .btn:disabled {
+            opacity: .4;
+            cursor: not-allowed;
+        }
+
+        .btn:focus-visible,
+        input:focus-visible {
+            outline: 2px solid var(--blue);
+            outline-offset: 2px;
+        }
+
+        .btn-primary {
+            background: var(--blue);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #008c93;
+        }
+
+        .btn-success {
+            background: var(--green);
+        }
+
+        .btn-danger {
+            background: var(--red);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--sub);
+        }
+
+        .btn-ghost:hover:not(:disabled) {
+            color: var(--text);
+            border-color: var(--sub);
+        }
 
         .section {
             margin-top: 20px;
             padding-top: 15px;
-            border-top: 1px solid var(--border-color);
+            border-top: 1px solid var(--border);
+        }
+
+        .section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
         }
 
         .section-title {
-            font-size: 0.9rem;
-            color: var(--text-sub);
-            margin-bottom: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-size: .9rem;
+            color: var(--sub);
+            margin: 0;
+        }
+
+        .section-head .btn {
+            width: auto;
+            margin: 0;
+            padding: 4px 10px;
+            font-size: .78rem;
         }
 
         input {
             width: 100%;
             padding: 12px;
             margin-bottom: 10px;
-            background-color: #141622;
-            border: 1px solid var(--border-color);
+            background: var(--inset);
+            border: 1px solid var(--border);
             border-radius: 6px;
             color: #fff;
-            box-sizing: border-box;
-            font-size: 0.9rem;
+            font-size: .9rem;
         }
 
-        input:focus {
-            outline: none;
-            border-color: var(--accent-blue);
+        input:disabled {
+            opacity: .5;
+        }
+
+        .pass-wrap {
+            position: relative;
+        }
+
+        .pass-wrap input {
+            padding-right: 64px;
+        }
+
+        .pass-toggle {
+            position: absolute;
+            right: 6px;
+            top: 6px;
+            padding: 6px 8px;
+            border: 0;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--sub);
+            font-size: .78rem;
+            cursor: pointer;
+        }
+
+        .pass-toggle:hover {
+            color: var(--text);
         }
 
         .btn-grid {
@@ -111,160 +248,275 @@
             gap: 10px;
         }
 
+        .btn-grid .btn {
+            margin-top: 0;
+        }
+
         #terminal {
-            background-color: #0d0e15;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 10px;
-            font-family: monospace;
-            font-size: 0.75rem;
-            color: #4dd0e1;
-            height: 100px;
+            height: 150px;
             overflow-y: auto;
-            margin-top: 10px;
+            padding: 10px;
+            background: #0d0e15;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-family: ui-monospace, Menlo, Consolas, monospace;
+            font-size: .75rem;
+            line-height: 1.5;
+        }
+
+        .line {
             white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            color: #4dd0e1;
+        }
+
+        .line.success {
+            color: var(--green);
+        }
+
+        .line.error {
+            color: #ff6b5e;
+        }
+
+        .line.warn {
+            color: var(--amber);
+        }
+
+        .line.muted {
+            color: var(--sub);
+        }
+
+        .ts {
+            color: var(--sub);
+            margin-right: 6px;
+        }
+
+        .hint {
+            margin: 12px 0 0;
+            font-size: .72rem;
+            color: var(--sub);
+            text-align: center;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .dot {
+                animation: none !important;
+            }
+
+            .btn {
+                transition: none;
+            }
         }
     </style>
 </head>
+
 <body>
 
-<div class="container">
-    <h2>Rover Bluetooth Controller</h2>
+    <div class="container">
+        <h2>Rover Bluetooth Controller</h2>
 
-    <!-- Connection Status -->
-    <div id="bt-status" class="status-badge disconnected">Disconnected</div>
-    <button id="btn-connect" class="btn btn-primary" onclick="connectBluetooth()">Connect to Rover</button>
-
-    <!-- Wi-Fi Provisioning Form -->
-    <div class="section">
-        <div class="section-title">Wi-Fi Credentials</div>
-        <input type="text" id="wifi-ssid" placeholder="Wi-Fi SSID (Name)" autocomplete="off">
-        <input type="password" id="wifi-pass" placeholder="Wi-Fi Password">
-        <button class="btn btn-primary" onclick="sendWifiCredentials()">Provision Network</button>
-    </div>
-
-    <!-- Application Process Controls -->
-    <div class="section">
-        <div class="section-title">Service Management</div>
-        <div class="btn-grid">
-            <button class="btn btn-success" onclick="sendAppCommand('START')">Start App</button>
-            <button class="btn btn-danger" onclick="sendAppCommand('STOP')">Stop App</button>
+        <!-- Connection indicator -->
+        <div id="status" class="status" data-state="disconnected" role="status" aria-live="polite">
+            <span class="dot"></span>
+            <div class="status-text">
+                <div id="status-label">Disconnected</div>
+                <div id="status-detail">No rover connected</div>
+            </div>
+            <span id="uptime"></span>
         </div>
+        <button id="btn-connect" class="btn btn-primary">Connect to Rover</button>
+
+        <!-- Wi-Fi -->
+        <div class="section">
+            <div class="section-head">
+                <h3 class="section-title">Wi-Fi credentials</h3>
+            </div>
+            <input type="text" id="wifi-ssid" placeholder="Wi-Fi SSID (name)" autocomplete="off" class="needs-conn"
+                disabled>
+            <div class="pass-wrap">
+                <input type="password" id="wifi-pass" placeholder="Wi-Fi password" autocomplete="off" class="needs-conn"
+                    disabled>
+                <button type="button" class="pass-toggle" id="pass-toggle">Show</button>
+            </div>
+            <button id="btn-wifi" class="btn btn-primary needs-conn" disabled>Send Wi-Fi credentials</button>
+        </div>
+
+        <!-- Service -->
+        <div class="section">
+            <div class="section-head">
+                <h3 class="section-title">Rover app</h3>
+            </div>
+            <div class="btn-grid">
+                <button class="btn btn-success needs-conn" data-cmd="START" disabled>Start app</button>
+                <button class="btn btn-danger needs-conn" data-cmd="STOP" disabled>Stop app</button>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="section">
+            <div class="section-head">
+                <h3 class="section-title">Activity log</h3>
+                <button id="btn-clear" class="btn btn-ghost">Clear log</button>
+            </div>
+            <div id="terminal" aria-live="off"></div>
+        </div>
+
+        <p class="hint">Web Bluetooth needs Chrome or Edge, and the page must be opened over HTTPS or localhost.</p>
     </div>
 
-    <!-- Activity Log Terminal -->
-    <div class="section">
-        <div class="section-title">Activity Log</div>
-        <div id="terminal">System Ready. Click "Connect to Rover" to scan...</div>
-    </div>
-</div>
+    <script>
+        // Must match bt.py on the Pi
+        const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
+        const WIFI_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1";
+        const CONTROL_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2";
 
-<script>
-    // GATT Service & Characteristic UUIDs matching bt_agent.py
-    const SERVICE_UUID      = "12345678-1234-5678-1234-56789abcdef0";
-    const WIFI_CHAR_UUID    = "12345678-1234-5678-1234-56789abcdef1";
-    const CONTROL_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2";
+        const $ = (id) => document.getElementById(id);
+        let bleDevice = null, bleService = null, connectedAt = null, uptimeTimer = null, state = "disconnected";
 
-    let bleDevice = null;
-    let gattServer = null;
-    let bleService = null;
-
-    function log(message) {
-        const terminal = document.getElementById('terminal');
-        const timestamp = new Date().toLocaleTimeString();
-        terminal.innerText += `\n[${timestamp}] ${message}`;
-        terminal.scrollTop = terminal.scrollHeight;
-    }
-
-    async function connectBluetooth() {
-        if (!navigator.bluetooth) {
-            log("ERROR: Web Bluetooth API is not supported on this browser!");
-            alert("Web Bluetooth requires Chrome, Edge, or Blueify (iOS).");
-            return;
+        /* ---------- Log ---------- */
+        function log(message, level = "info") {
+            const term = $("terminal");
+            const line = document.createElement("div");
+            line.className = "line " + level;
+            const ts = document.createElement("span");
+            ts.className = "ts";
+            ts.textContent = new Date().toLocaleTimeString();
+            line.append(ts, message);
+            term.appendChild(line);
+            while (term.childElementCount > 300) term.firstChild.remove();
+            term.scrollTop = term.scrollHeight;
+        }
+        function clearLog() {
+            $("terminal").replaceChildren();
+            log("Log cleared.", "muted");
         }
 
-        try {
-            log("Searching for BLE devices...");
-            bleDevice = await navigator.bluetooth.requestDevice({
-                filters: [{ services: [SERVICE_UUID] }]
-            });
-
-            log(`Connecting to ${bleDevice.name || 'Rover'}...`);
-            gattServer = await bleDevice.gatt.connect();
-
-            log("Discovering GATT Services...");
-            bleService = await gattServer.getPrimaryService(SERVICE_UUID);
-
-            // Update UI State
-            const statusBadge = document.getElementById('bt-status');
-            statusBadge.innerText = "Connected via BLE";
-            statusBadge.className = "status-badge connected";
-            
-            log("BLE Connection Established!");
-
-            // Listen for disconnections
-            bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
-        } catch (error) {
-            log(`Connection Error: ${error.message}`);
+        /* ---------- UI state ---------- */
+        function formatUptime(ms) {
+            const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+            const pad = (n) => String(n).padStart(2, "0");
+            return (h ? h + ":" : "") + pad(m) + ":" + pad(s % 60);
         }
-    }
+        function setState(next, detail) {
+            state = next;
+            const labels = { disconnected: "Disconnected", connecting: "Connecting…", connected: "Connected" };
+            $("status").dataset.state = next;
+            $("status-label").textContent = labels[ next ];
+            $("status-detail").textContent = detail || "";
 
-    function onDisconnected() {
-        const statusBadge = document.getElementById('bt-status');
-        statusBadge.innerText = "Disconnected";
-        statusBadge.className = "status-badge disconnected";
-        log("BLE Device Disconnected.");
-        bleService = null;
-    }
+            const btn = $("btn-connect");
+            btn.disabled = next === "connecting";
+            btn.className = "btn " + (next === "connected" ? "btn-ghost" : "btn-primary");
+            btn.textContent = next === "connected" ? "Disconnect" : next === "connecting" ? "Connecting…" : "Connect to Rover";
 
-    async function sendWifiCredentials() {
-        if (!bleService) {
-            alert("Please connect via Bluetooth first!");
-            return;
+            document.querySelectorAll(".needs-conn").forEach((el) => (el.disabled = next !== "connected"));
+
+            clearInterval(uptimeTimer);
+            if (next === "connected") {
+                connectedAt = Date.now();
+                $("uptime").textContent = "00:00";
+                uptimeTimer = setInterval(() => ($("uptime").textContent = formatUptime(Date.now() - connectedAt)), 1000);
+            } else {
+                $("uptime").textContent = "";
+            }
         }
 
-        const ssid = document.getElementById('wifi-ssid').value.trim();
-        const pass = document.getElementById('wifi-pass').value.trim();
+        /* ---------- Connection ---------- */
+        async function connectBluetooth() {
+            if (!navigator.bluetooth) {
+                log("Web Bluetooth is not supported in this browser. Use Chrome or Edge.", "error");
+                return;
+            }
+            setState("connecting", "Searching for rover…");
+            try {
+                log("Searching for BLE devices…");
+                bleDevice = await navigator.bluetooth.requestDevice({ filters: [ { services: [ SERVICE_UUID ] } ] });
+                bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
 
-        if (!ssid || !pass) {
-            alert("Both SSID and Password are required!");
-            return;
+                const name = bleDevice.name || "Rover";
+                setState("connecting", "Connecting to " + name + "…");
+                log("Connecting to " + name + "…");
+                const server = await bleDevice.gatt.connect();
+
+                log("Discovering GATT services…");
+                bleService = await server.getPrimaryService(SERVICE_UUID);
+
+                setState("connected", name);
+                log("Connected to " + name + ".", "success");
+            } catch (err) {
+                bleService = null;
+                setState("disconnected", "No rover connected");
+                // NotFoundError = user closed the picker
+                log(err.name === "NotFoundError" ? "No device selected." : "Connection error: " + err.message,
+                    err.name === "NotFoundError" ? "muted" : "error");
+            }
         }
 
-        try {
-            log(`Sending Wi-Fi setup for: ${ssid}...`);
-            const characteristic = await bleService.getCharacteristic(WIFI_CHAR_UUID);
-            
-            // Format as "SSID:Password"
-            const payload = `${ssid}:${pass}`;
-            const encoder = new TextEncoder();
-            
-            await characteristic.writeValue(encoder.encode(payload));
-            log("Wi-Fi credentials transmitted successfully!");
-        } catch (error) {
-            log(`Wi-Fi Error: ${error.message}`);
-        }
-    }
-
-    async function sendAppCommand(command) {
-        if (!bleService) {
-            alert("Please connect via Bluetooth first!");
-            return;
+        function disconnectBluetooth() {
+            if (bleDevice && bleDevice.gatt.connected) {
+                log("Disconnecting…", "warn");
+                bleDevice.gatt.disconnect(); // triggers onDisconnected
+            }
         }
 
-        try {
-            log(`Sending Service Command: ${command}...`);
-            const characteristic = await bleService.getCharacteristic(CONTROL_CHAR_UUID);
-            const encoder = new TextEncoder();
-            
-            await characteristic.writeValue(encoder.encode(command));
-            log(`Command '${command}' sent successfully!`);
-        } catch (error) {
-            log(`Command Error: ${error.message}`);
+        function onDisconnected() {
+            bleService = null;
+            setState("disconnected", "Connection lost or closed");
+            log("BLE device disconnected.", "warn");
         }
-    }
-</script>
 
+        /* ---------- Writes ---------- */
+        async function writeText(uuid, text) {
+            const ch = await bleService.getCharacteristic(uuid);
+            const data = new TextEncoder().encode(text);
+            if (ch.writeValueWithResponse) await ch.writeValueWithResponse(data);
+            else await ch.writeValue(data);
+        }
+
+        async function sendWifiCredentials() {
+            const ssid = $("wifi-ssid").value.trim();
+            const pass = $("wifi-pass").value; // don't trim: passwords may contain spaces
+            if (!ssid || !pass) { log("Enter both SSID and password.", "warn"); return; }
+
+            const btn = $("btn-wifi");
+            btn.disabled = true;
+            try {
+                log("Sending Wi-Fi credentials for " + ssid + "…");
+                await writeText(WIFI_CHAR_UUID, ssid + ":" + pass);
+                log("Wi-Fi credentials sent.", "success");
+            } catch (err) {
+                log("Wi-Fi error: " + err.message, "error");
+            } finally {
+                btn.disabled = state !== "connected";
+            }
+        }
+
+        async function sendAppCommand(command, btn) {
+            btn.disabled = true;
+            try {
+                log("Sending " + command + "…");
+                await writeText(CONTROL_CHAR_UUID, command);
+                log(command + " sent.", "success");
+            } catch (err) {
+                log("Command error: " + err.message, "error");
+            } finally {
+                btn.disabled = state !== "connected";
+            }
+        }
+
+        /* ---------- Wire up ---------- */
+        $("btn-connect").addEventListener("click", () => (state === "connected" ? disconnectBluetooth() : connectBluetooth()));
+        $("btn-wifi").addEventListener("click", sendWifiCredentials);
+        $("btn-clear").addEventListener("click", clearLog);
+        document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click", () => sendAppCommand(b.dataset.cmd, b)));
+        $("pass-toggle").addEventListener("click", () => {
+            const show = $("wifi-pass").type === "password";
+            $("wifi-pass").type = show ? "text" : "password";
+            $("pass-toggle").textContent = show ? "Hide" : "Show";
+        });
+
+        log('Ready. Tap "Connect to Rover" to scan.', "muted");
+    </script>
 </body>
+
 </html>
