@@ -31,22 +31,22 @@ def stop():
   RIGHT_MOTOR_REVERSE.value = 0
   sleep(0.2)
   
-def forward(speed):
+def forward(speed=1.0):
   stop()
   LEFT_MOTOR_FORWARD.value = speed
   RIGHT_MOTOR_FORWARD.value = speed
 
-def reverse(speed):
+def reverse(speed=1.0):
   stop()
   LEFT_MOTOR_REVERSE.value = speed
   RIGHT_MOTOR_REVERSE.value = speed
 
-def turnRight(speed):
+def turnRight(speed=1.0):
   stop()
   LEFT_MOTOR_FORWARD.value = speed
   RIGHT_MOTOR_REVERSE.value = speed
 
-def turnLeft(speed):
+def turnLeft(speed=1.0):
   stop()
   LEFT_MOTOR_REVERSE.value = speed
   RIGHT_MOTOR_FORWARD.value = speed

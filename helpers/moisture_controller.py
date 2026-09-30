@@ -8,6 +8,13 @@ class MOISTURE_SENSOR:
 
     @staticmethod
     def getSoilMoistureState():
+        try:
+            if MOISTURE_SENSOR.moistureSensor.is_pressed:
+                MOISTURE_SENSOR.soilMoistureState = "Wet"
+            else:
+                MOISTURE_SENSOR.soilMoistureState = "Dry"
+        except Exception as e:
+            print(f"⚠️ Error reading moisture sensor hardware state: {e}")
         return MOISTURE_SENSOR.soilMoistureState
 
     @staticmethod

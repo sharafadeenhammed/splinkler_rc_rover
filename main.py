@@ -129,7 +129,7 @@ def control_motor():
         
         speed_percent = max(0, min(100, speed_percent))
         duty_cycle = speed_percent / 100.0
-        
+        status = "--- ----"
         if speed_percent == 0:
             # Full stop: cut power to both sides of the H-bridge
             stop()
@@ -160,9 +160,9 @@ def getHumidityReading():
   payload = {}
   with data_lock:
     payload = sensor_data.copy()
-    payload["soil"] = MOISTURE_SENSOR.soilMoistureState
+    payload["soil"] = MOISTURE_SENSOR.getSoilMoistureState()
     payload["pump_active"] = WATER_PUMP.isPumpOn()
-    payload["sensor_deployed"] = sensor_servo_deployed
+    payload["sensor_deployed"] = sensor_servo_deployed or (sensor_servo.angle is not None and sensor_servo.angle > -50)
     payload["distance_cm"] = get_distance_cm()
     payload["ultrasonic_enabled"] = is_ultrasonic_enabled()
     payload["vision_status"] = get_vision_status()

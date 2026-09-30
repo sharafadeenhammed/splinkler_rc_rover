@@ -14,6 +14,8 @@ auto_lock = threading.Lock()
 
 OBSTACLE_THRESHOLD_CM = 20.0   # 20 cm obstacle threshold
 SOIL_CHECK_INTERVAL_SEC = 10.0  # Check soil moisture every 10s of driving
+WATERING_DURATION_SEC = 3.0    # Duration (seconds) to pump water when dry soil detected
+AUTO_DRIVE_SPEED = 0.7         # Cruising speed (0.0 to 1.0) during autonomous patrol
 
 def enable_ultrasonic_in_auto():
     global use_ultrasonic_in_auto
@@ -64,17 +66,17 @@ def autonomous_routine():
                 time.sleep(0.2)
                 
                 # Reverse slightly
-                reverse(1)
+                reverse(AUTO_DRIVE_SPEED)
                 time.sleep(0.4)
                 stop()
                 
                 # Turn towards whichever direction has fewer visual obstacles
                 if vis_state == "OBSTACLE_LEFT":
                     print("↪️ Turning RIGHT to avoid left visual barrier...")
-                    turnRight(1)
+                    turnRight(AUTO_DRIVE_SPEED)
                 else:
                     print("↩️ Turning LEFT to avoid right visual barrier...")
-                    turnLeft(1)
+                    turnLeft(AUTO_DRIVE_SPEED)
                     
                 time.sleep(0.7)
                 stop()
@@ -84,37 +86,41 @@ def autonomous_routine():
             # 4. Periodic Soil Moisture Inspection
             now = time.time()
             if now - last_soil_check >= SOIL_CHECK_INTERVAL_SEC:
-                print("🌱 Stopping for periodic soil moisture check...")
+                print("🌱 Rover halting to check soil moisture...")
                 stop()
                 WATER_PUMP.turnOffPump()
-                time.sleep(1.5) # wait for remaining water in the pipeline to drip out 
-                forward() # move forward a bit to avoid the moisture sensor from picking up dripped out water
                 time.sleep(0.5)
-                # Deploy sensor arm (90 deg)
+                
+                # Deploy sensor probe into the ground (-20 deg)
+                print("🌱 Deploying moisture probe into soil...")
                 sensor_servo.angle = -20
-                time.sleep(1.2)
+                time.sleep(1.2)  # Settle time in dirt
                 
                 soil_state = MOISTURE_SENSOR.getSoilMoistureState()
-                print(f"🌱 Soil state: {soil_state}")
+                print(f"🌱 Soil moisture status: {soil_state}")
                 
-                if soil_state.lower() == "dry":
-                    print("💧 Soil DRY -> Activating Water Pump for 3 seconds...")
+                if str(soil_state).strip().lower() == "dry":
+                    print(f"💧 DRY ground detected! Running water pump for {WATERING_DURATION_SEC}s...")
                     WATER_PUMP.turnOnPump()
-                    # pump_start = time.time()
-                    # while time.time() - pump_start < 3.0 and auto_mode_active:
-                        # time.sleep(0.2)
-                    # WATER_PUMP.turnOffPump()
+                    pump_start = time.time()
+                    while (time.time() - pump_start < WATERING_DURATION_SEC) and auto_mode_active:
+                        time.sleep(0.1)
+                    WATER_PUMP.turnOffPump()
+                    print("💧 Ground watered successfully.")
+                    time.sleep(0.5)
                 else:
-                    print("✅ Soil WET -> Skipping pump.")
-                    WATER_PUMP.turnOffPump()                
-                # Retract sensor arm (-90 deg)
+                    print("✅ Soil is WET / moist. Skipping pump -> continuing search for dry ground.")
+                    WATER_PUMP.turnOffPump()
+                
+                # Safely retract sensor probe back up (-90 deg) before moving
+                print("🌱 Retracting moisture sensor arm...")
                 sensor_servo.angle = -90
                 time.sleep(0.8)
                 last_soil_check = time.time()
                 continue
             
-            # 5. Normal Drive Forward
-            forward(1)
+            # 5. Normal Drive Forward: keep searching for dry ground
+            forward(AUTO_DRIVE_SPEED)
             time.sleep(0.3)
             
         except Exception as e:
@@ -144,6 +150,7 @@ def stop_auto_mode():
         auto_mode_active = False
         stop()
         WATER_PUMP.turnOffPump()
+        sensor_servo.angle = -90
     return False
 
 def toggle_auto_mode():
