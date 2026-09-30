@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Rover BLE Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0f111a;
+            --card-bg: #1e2130;
+            --accent-blue: #00adb5;
+            --accent-green: #2ecc71;
+            --accent-red: #e74c3c;
+            --text-main: #ffffff;
+            --text-sub: #a0a5b5;
+            --border-color: #2e344e;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 420px;
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border-color);
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 1.4rem;
+            text-align: center;
+            color: var(--accent-blue);
+        }
+
+        .status-badge {
+            display: block;
+            text-align: center;
+            padding: 8px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            margin: 15px 0;
+            transition: all 0.3s ease;
+        }
+
+        .disconnected { background-color: rgba(231, 76, 60, 0.2); color: var(--accent-red); border: 1px solid var(--accent-red); }
+        .connected { background-color: rgba(46, 204, 113, 0.2); color: var(--accent-green); border: 1px solid var(--accent-green); }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.1s, background-color 0.2s;
+            margin-top: 6px;
+        }
+
+        .btn:active { transform: scale(0.98); }
+        .btn-primary { background-color: var(--accent-blue); color: #fff; }
+        .btn-primary:hover { background-color: #008c93; }
+        .btn-success { background-color: var(--accent-green); color: #fff; }
+        .btn-danger { background-color: var(--accent-red); color: #fff; }
+
+        .section {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .section-title {
+            font-size: 0.9rem;
+            color: var(--text-sub);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            background-color: #141622;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: #fff;
+            box-sizing: border-box;
+            font-size: 0.9rem;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .btn-grid {
+            display: flex;
+            gap: 10px;
+        }
+
+        #terminal {
+            background-color: #0d0e15;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 0.75rem;
+            color: #4dd0e1;
+            height: 100px;
+            overflow-y: auto;
+            margin-top: 10px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Rover Bluetooth Controller</h2>
+
+    <!-- Connection Status -->
+    <div id="bt-status" class="status-badge disconnected">Disconnected</div>
+    <button id="btn-connect" class="btn btn-primary" onclick="connectBluetooth()">Connect to Rover</button>
+
+    <!-- Wi-Fi Provisioning Form -->
+    <div class="section">
+        <div class="section-title">Wi-Fi Credentials</div>
+        <input type="text" id="wifi-ssid" placeholder="Wi-Fi SSID (Name)" autocomplete="off">
+        <input type="password" id="wifi-pass" placeholder="Wi-Fi Password">
+        <button class="btn btn-primary" onclick="sendWifiCredentials()">Provision Network</button>
+    </div>
+
+    <!-- Application Process Controls -->
+    <div class="section">
+        <div class="section-title">Service Management</div>
+        <div class="btn-grid">
+            <button class="btn btn-success" onclick="sendAppCommand('START')">Start App</button>
+            <button class="btn btn-danger" onclick="sendAppCommand('STOP')">Stop App</button>
+        </div>
+    </div>
+
+    <!-- Activity Log Terminal -->
+    <div class="section">
+        <div class="section-title">Activity Log</div>
+        <div id="terminal">System Ready. Click "Connect to Rover" to scan...</div>
+    </div>
+</div>
+
+<script>
+    // GATT Service & Characteristic UUIDs matching bt_agent.py
+    const SERVICE_UUID      = "12345678-1234-5678-1234-56789abcdef0";
+    const WIFI_CHAR_UUID    = "12345678-1234-5678-1234-56789abcdef1";
+    const CONTROL_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2";
+
+    let bleDevice = null;
+    let gattServer = null;
+    let bleService = null;
+
+    function log(message) {
+        const terminal = document.getElementById('terminal');
+        const timestamp = new Date().toLocaleTimeString();
+        terminal.innerText += `\n[${timestamp}] ${message}`;
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    async function connectBluetooth() {
+        if (!navigator.bluetooth) {
+            log("ERROR: Web Bluetooth API is not supported on this browser!");
+            alert("Web Bluetooth requires Chrome, Edge, or Blueify (iOS).");
+            return;
+        }
+
+        try {
+            log("Searching for BLE devices...");
+            bleDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ services: [SERVICE_UUID] }]
+            });
+
+            log(`Connecting to ${bleDevice.name || 'Rover'}...`);
+            gattServer = await bleDevice.gatt.connect();
+
+            log("Discovering GATT Services...");
+            bleService = await gattServer.getPrimaryService(SERVICE_UUID);
+
+            // Update UI State
+            const statusBadge = document.getElementById('bt-status');
+            statusBadge.innerText = "Connected via BLE";
+            statusBadge.className = "status-badge connected";
+            
+            log("BLE Connection Established!");
+
+            // Listen for disconnections
+            bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        } catch (error) {
+            log(`Connection Error: ${error.message}`);
+        }
+    }
+
+    function onDisconnected() {
+        const statusBadge = document.getElementById('bt-status');
+        statusBadge.innerText = "Disconnected";
+        statusBadge.className = "status-badge disconnected";
+        log("BLE Device Disconnected.");
+        bleService = null;
+    }
+
+    async function sendWifiCredentials() {
+        if (!bleService) {
+            alert("Please connect via Bluetooth first!");
+            return;
+        }
+
+        const ssid = document.getElementById('wifi-ssid').value.trim();
+        const pass = document.getElementById('wifi-pass').value.trim();
+
+        if (!ssid || !pass) {
+            alert("Both SSID and Password are required!");
+            return;
+        }
+
+        try {
+            log(`Sending Wi-Fi setup for: ${ssid}...`);
+            const characteristic = await bleService.getCharacteristic(WIFI_CHAR_UUID);
+            
+            // Format as "SSID:Password"
+            const payload = `${ssid}:${pass}`;
+            const encoder = new TextEncoder();
+            
+            await characteristic.writeValue(encoder.encode(payload));
+            log("Wi-Fi credentials transmitted successfully!");
+        } catch (error) {
+            log(`Wi-Fi Error: ${error.message}`);
+        }
+    }
+
+    async function sendAppCommand(command) {
+        if (!bleService) {
+            alert("Please connect via Bluetooth first!");
+            return;
+        }
+
+        try {
+            log(`Sending Service Command: ${command}...`);
+            const characteristic = await bleService.getCharacteristic(CONTROL_CHAR_UUID);
+            const encoder = new TextEncoder();
+            
+            await characteristic.writeValue(encoder.encode(command));
+            log(`Command '${command}' sent successfully!`);
+        } catch (error) {
+            log(`Command Error: ${error.message}`);
+        }
+    }
+</script>
+
+</body>
+</html>
