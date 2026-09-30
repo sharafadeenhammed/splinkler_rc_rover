@@ -3,10 +3,10 @@ import os
 import subprocess
 from bluez_peripheral.gatt.service import Service
 from bluez_peripheral.gatt.characteristic import characteristic, CharacteristicFlags
-from bluez_peripheral.advert.advertisement import Advertisement
-from bluez_peripheral.agent import NoInputNoOutputAgent
+from bluez_peripheral.advertisment import Advertisement
+from bluez_peripheral.util import Adapter
 
-# Unique UUIDs matching your app setup
+# Unique UUIDs matching your setup
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 WIFI_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 CONTROL_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
@@ -15,6 +15,7 @@ def set_wifi_credentials(ssid, password):
     try:
         cmd = f"sudo nmcli dev wifi connect '{ssid}' password '{password}'"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        print(f"[BLE] Wi-Fi Result: {result.stdout}")
         return result.returncode == 0
     except Exception as e:
         print(f"[BLE Error] Wi-Fi setup failed: {e}")
@@ -56,10 +57,12 @@ class RoverService(Service):
         control_app(command)
 
 async def main():
-    bus = await asyncio.get_event_loop().run_in_executor(None, lambda: None)
+    # Connect to the default Bluetooth adapter (hci0) via DBus
+    adapter = await Adapter.get_first()
     
+    # Initialize GATT service
     service = RoverService()
-    await service.register()
+    await service.register(adapter)
 
     # Configure BLE Advertisement
     advert = Advertisement(
@@ -68,13 +71,12 @@ async def main():
         appearance=0x0000,
         timeout=0
     )
-    await advert.register()
+    await advert.register(adapter)
 
-    print("[BLE] Rover GATT Service & Advertisement running!")
+    print("[BLE] Rover GATT Service & Advertisement active and advertising!")
     
-    # Keep running
-    while True:
-        await asyncio.sleep(3600)
+    # Keep event loop running
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
