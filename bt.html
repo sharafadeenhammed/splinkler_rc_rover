@@ -386,6 +386,7 @@
                 <button class="btn btn-success needs-conn" data-cmd="START" disabled>Start app</button>
                 <button class="btn btn-danger needs-conn" data-cmd="STOP" disabled>Stop app</button>
             </div>
+            <button id="btn-update" class="btn btn-ghost needs-conn" disabled>Update rover code</button>
         </div>
 
         <!-- Log -->
@@ -606,6 +607,39 @@
             log("Opening " + url, "info");
             window.open(url, "_blank", "noopener");
         });
+
+        /* ---------- Update rover code (git pull on the Pi) ---------- */
+        const UPDATE_STATUS_UUID = "12345678-1234-5678-1234-56789abcdef4";
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        async function updateRover() {
+            const btn = $("btn-update");
+            btn.disabled = true;
+            try {
+                log("Telling rover to pull updates…");
+                await writeText(CONTROL_CHAR_UUID, "UPDATE");
+                const ch = await bleService.getCharacteristic(UPDATE_STATUS_UUID);
+                for (let i = 0; i < 45; i++) {           // wait up to ~90 s
+                    await sleep(2000);
+                    if (state !== "connected") {
+                        log("Lost connection during update. Reconnect and try again to see the result.", "warn");
+                        return;
+                    }
+                    const status = new TextDecoder().decode(await ch.readValue()).trim();
+                    if (status.startsWith("RUNNING")) continue;
+                    log(status, status.startsWith("OK") ? "success" : "error");
+                    return;
+                }
+                log("Update is taking longer than expected. Try again shortly.", "warn");
+            } catch (err) {
+                log(err.name === "NotFoundError"
+                    ? "Update status characteristic not found. Add it to bt.py and restart the script."
+                    : "Update error: " + err.message, "error");
+            } finally {
+                btn.disabled = state !== "connected";
+            }
+        }
+        $("btn-update").addEventListener("click", updateRover);
 
         log('Ready. Tap "Connect to Rover" to scan.', "muted");
     </script>

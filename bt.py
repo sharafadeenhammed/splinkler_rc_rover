@@ -1,15 +1,21 @@
 import asyncio
 import subprocess
+import threading
 from bluez_peripheral.gatt.service import Service
 from bluez_peripheral.gatt.characteristic import characteristic, CharacteristicFlags
 from bluez_peripheral.advert import Advertisement
 from bluez_peripheral.util import get_message_bus, Adapter
 
+
+
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 WIFI_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 CONTROL_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 IP_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef3"
+UPDATE_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef4"
 
+PROJECT_DIR = "/home/rover_dev/project"   # must be a git repo
+update_status = "IDLE"
 
 def set_wifi_credentials(ssid, password):
     try:
@@ -25,7 +31,9 @@ def set_wifi_credentials(ssid, password):
         return False
 
 
+
 def control_app(action):
+    global update_status
     action_str = action.strip().upper()
     if action_str == "START":
         subprocess.run(["sudo", "systemctl", "start", "rover.service"])
@@ -33,7 +41,11 @@ def control_app(action):
     elif action_str == "STOP":
         subprocess.run(["sudo", "systemctl", "stop", "rover.service"])
         print("[BLE] Stopped rover.service")
-
+    elif action_str == "UPDATE":
+        if update_status != "RUNNING":
+            update_status = "RUNNING"   # set now so the dashboard never reads a stale status
+            threading.Thread(target=run_update, daemon=True).start()
+            print("[BLE] Update started")
 
 def get_ip_address():
     try:
@@ -43,6 +55,21 @@ def get_ip_address():
     except Exception:
         return ""
 
+def run_update():
+    global update_status
+    try:
+        r = subprocess.run(["git", "-C", PROJECT_DIR, "pull", "--ff-only"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            if "Already up to date" in r.stdout:
+                update_status = "OK: already up to date"
+            else:
+                update_status = "OK: updated. Stop/Start the app to apply."
+        else:
+            lines = (r.stderr.strip() or r.stdout.strip()).splitlines()
+            update_status = "FAIL: " + (lines[-1] if lines else "git pull failed")[:150]
+    except Exception as e:
+        update_status = f"FAIL: {e}"[:160]
 
 class RoverService(Service):
     def __init__(self):
@@ -73,6 +100,10 @@ class RoverService(Service):
     @characteristic(IP_CHAR_UUID, CharacteristicFlags.READ)
     def ip_char(self, options):
         return get_ip_address().encode("utf-8")
+    
+    @characteristic(UPDATE_STATUS_CHAR_UUID, CharacteristicFlags.READ)
+    def update_status_char(self, options):
+        return update_status.encode("utf-8")
 
 
 async def main():
