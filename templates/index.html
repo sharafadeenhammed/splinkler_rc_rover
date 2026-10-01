@@ -32,10 +32,11 @@
       <section class="panel video-panel">
         <div class="panel-header">
           <span class="panel-title">📹 Live Camera Feed</span>
-          <span class="stream-live-tag"><span class="pulse-dot"></span> LIVE</span>
+          <span class="stream-live-tag" id="streamLiveTag"><span class="pulse-dot"></span> LIVE</span>
         </div>
-        <div class="video-container">
-          <img src="/stream" alt="Live Camera Stream" class="video-feed" onerror="this.onerror=null; this.src='http://192.168.156.181:5000/stream';">
+        <div class="video-container" id="videoContainer">
+          <!-- We will set the src via JS to handle reconnects -->
+          <img id="videoFeed" alt="Live Camera Stream" class="video-feed" onerror="handleVideoError()">
         </div>
         <div class="camera-bar">
           <span class="cam-label">Pan Servo: <strong id="current-angle">0</strong>°</span>
@@ -81,8 +82,34 @@
             </div>
           </div>
         </div>
+
         <!-- Hidden fallback container -->
         <div id="sensorReadings" style="display:none;"></div>
+
+        <!-- Auto Mode Configuration Panel -->
+        <div class="auto-config-panel">
+          <div class="auto-config-header">
+            <span class="panel-title">🤖 Autonomous Settings</span>
+            <span class="auto-progress-text" id="autoProgressText">Idle</span>
+          </div>
+          <div class="auto-progress-bar">
+            <div class="auto-progress-fill" id="autoProgressFill" style="width: 0%;"></div>
+          </div>
+          <div class="auto-config-grid">
+            <div class="config-item">
+              <label>Area Width (m)</label>
+              <input type="number" id="areaWidthInput" value="10.0" step="0.5" min="0.5" onchange="updateAreaSettings()">
+            </div>
+            <div class="config-item">
+              <label>Area Height (m)</label>
+              <input type="number" id="areaHeightInput" value="10.0" step="0.5" min="0.5" onchange="updateAreaSettings()">
+            </div>
+            <div class="config-item speed-config">
+              <label>Auto Cruise Speed (<span id="autoSpeedVal">70</span>%)</label>
+              <input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()">
+            </div>
+          </div>
+        </div>
 
         <!-- Equipment Toggle Buttons -->
         <div class="equipment-grid">
@@ -113,7 +140,7 @@
         <div class="drive-section">
           <div class="speed-control">
             <div class="speed-header">
-              <label for="speedSlider">Speed Target Limit</label>
+              <label for="speedSlider">Manual Limit</label>
               <span class="speed-value"><span id="targetVal">50</span>%</span>
             </div>
             <input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider">

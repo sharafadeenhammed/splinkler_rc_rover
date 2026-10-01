@@ -15,6 +15,15 @@ const valDist = document.getElementById("valDist");
 const modeTxt = document.getElementById("modeTxt");
 const wsStatusTxt = document.getElementById("wsStatusTxt");
 
+// New Auto Config Elements
+const areaWidthInput = document.getElementById("areaWidthInput");
+const areaHeightInput = document.getElementById("areaHeightInput");
+const autoSpeedSlider = document.getElementById("autoSpeedSlider");
+const autoSpeedVal = document.getElementById("autoSpeedVal");
+const autoProgressText = document.getElementById("autoProgressText");
+const autoProgressFill = document.getElementById("autoProgressFill");
+const videoFeed = document.getElementById("videoFeed");
+
 // Dynamic base URLs
 const baseURL = window.location.origin;
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -29,8 +38,27 @@ let wsConnected = false;
 let reconnectTimer = null;
 let heartbeatInterval = null;
 let httpPollInterval = null;
+let videoRetryTimer = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY_MS = 5000;
+
+// Initialize video feed source
+if (videoFeed) {
+  videoFeed.src = `${baseURL}/stream`;
+}
+
+// ----------------- Video Feed Reconnection -----------------
+
+function handleVideoError() {
+  console.warn("📹 Video stream dropped. Retrying in 3 seconds...");
+  clearTimeout(videoRetryTimer);
+  videoRetryTimer = setTimeout(() => {
+    if (videoFeed) {
+      // Add cache buster to force reload
+      videoFeed.src = `${baseURL}/stream?t=${new Date().getTime()}`;
+    }
+  }, 3000);
+}
 
 // ----------------- Connection Badge & State -----------------
 
@@ -72,13 +100,9 @@ function initWebSocket() {
     reconnectAttempts = 0;
     updateConnectionBadge("connected", "ONLINE ⚡");
 
-    // Stop fallback HTTP polling when WebSocket is live
     ensureHttpPolling(false);
-
-    // Request initial telemetry immediately on connect/reconnect
     sendWSCommand({ type: "get_status" });
 
-    // Start client heartbeat ping every 2s
     clearInterval(heartbeatInterval);
     heartbeatInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -123,15 +147,11 @@ function handleDisconnect() {
   wsConnected = false;
   clearInterval(heartbeatInterval);
 
-  // Safety: Rover server immediately halts on disconnect; synchronize client UI
   activeDirection = null;
   if (statusTxt) statusTxt.innerText = "STOPPED (SAFE)";
 
   updateConnectionBadge("connecting", "RECONNECTING 🔄");
-
-  // Enable HTTP polling fallback while WebSocket is down
   ensureHttpPolling(true);
-
   scheduleReconnect();
 }
 
@@ -204,21 +224,33 @@ function renderTelemetry(data) {
     `;
   }
 
-  if (data.pump_active !== undefined) {
-    updatePumpUI(data.pump_active);
-  }
-  if (data.sensor_deployed !== undefined) {
-    updateSensorUI(data.sensor_deployed);
-  }
-  if (data.auto_active !== undefined) {
-    updateAutoUI(data.auto_active);
-  }
+  if (data.pump_active !== undefined) updatePumpUI(data.pump_active);
+  if (data.sensor_deployed !== undefined) updateSensorUI(data.sensor_deployed);
+  if (data.auto_active !== undefined) updateAutoUI(data.auto_active);
+  
   if (data.motor_status !== undefined && statusTxt) {
     statusTxt.innerText = data.motor_status;
   }
   if (data.camera_angle !== undefined) {
     const angleElem = document.getElementById("current-angle");
     if (angleElem) angleElem.innerText = data.camera_angle;
+  }
+  
+  if (data.auto_progress) {
+    updateAutoProgressUI(data.auto_progress);
+  }
+}
+
+function updateAutoProgressUI(prog) {
+  if (autoProgressText) {
+    let text = "Idle";
+    if (prog.phase !== "idle") {
+      text = `${prog.phase.toUpperCase()} | Strip ${prog.strip}/${prog.total_strips} | ${prog.coverage_pct}%`;
+    }
+    autoProgressText.innerText = text;
+  }
+  if (autoProgressFill) {
+    autoProgressFill.style.width = `${prog.coverage_pct || 0}%`;
   }
 }
 
@@ -273,7 +305,6 @@ function sendHardwareCommand(speed, direction) {
   const sent = sendWSCommand(payload);
 
   if (!sent) {
-    // HTTP Fallback
     fetch(`${baseURL}/motor?speed=${speed}&dir=${direction}`)
       .then((res) => res.json())
       .then((data) => {
@@ -331,6 +362,28 @@ function tiltCamera(direction) {
         }
       })
       .catch((err) => console.error("Camera tilt HTTP error:", err));
+  }
+}
+
+// ----------------- Autonomous Config Updaters -----------------
+
+function updateAreaSettings() {
+  const w = parseFloat(areaWidthInput.value);
+  const h = parseFloat(areaHeightInput.value);
+  const sent = sendWSCommand({ type: "set_area", width_m: w, height_m: h });
+  if (!sent) {
+    fetch(`${baseURL}/set_area?width_m=${w}&height_m=${h}`)
+      .catch(err => console.error("Area HTTP error:", err));
+  }
+}
+
+function updateAutoSpeed() {
+  const speed = parseInt(autoSpeedSlider.value);
+  if (autoSpeedVal) autoSpeedVal.innerText = speed;
+  const sent = sendWSCommand({ type: "auto_speed", speed_pct: speed });
+  if (!sent) {
+    fetch(`${baseURL}/auto_speed?speed_pct=${speed}`)
+      .catch(err => console.error("Auto speed HTTP error:", err));
   }
 }
 
@@ -442,7 +495,6 @@ document.addEventListener("keyup", (event) => {
   }
 });
 
-// Safety: Halt movement if window loses focus or before page unloads
 window.addEventListener("blur", () => {
   if (activeDirection) {
     activeDirection = null;

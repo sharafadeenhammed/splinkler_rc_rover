@@ -17,12 +17,13 @@ except ImportError:
     print("⚠️ flask-sock not installed. WebSocket functionality will be disabled.")
 
 from helpers import (
-    forward, reverse, turnRight, turnLeft, stop, 
-    readHumidityAndTemp, camera_servo, sensor_servo, 
+    forward, reverse, turnRight, turnLeft, stop,
+    readHumidityAndTemp, camera_servo, sensor_servo,
     MOISTURE_SENSOR, WATER_PUMP,
     get_distance_cm, set_latest_frame, get_vision_status,
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
-    start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active
+    start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
+    get_auto_progress, set_auto_speed, set_area
 )
 
 app = Flask(__name__)
@@ -245,10 +246,30 @@ def get_telemetry_payload():
     payload["ultrasonic_enabled"] = is_ultrasonic_enabled()
     payload["vision_status"] = get_vision_status()
     payload["auto_active"] = is_auto_active()
+    payload["auto_progress"] = get_auto_progress()
     payload["motor_status"] = motor_status
     payload["camera_angle"] = camera_current_angle
     payload["success"] = True
     return payload
+
+
+def handle_set_auto_speed(speed_pct):
+    """Set autonomous cruise speed (0–100). Persists across auto mode restarts."""
+    try:
+        spd = max(10, min(100, int(float(speed_pct))))
+        set_auto_speed(spd)
+        return {"success": True, "auto_speed_pct": spd}
+    except (TypeError, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
+def handle_set_area(width_m, height_m):
+    """Set coverage area dimensions in metres."""
+    try:
+        set_area(float(width_m), float(height_m))
+        return {"success": True, "area_width_m": float(width_m), "area_height_m": float(height_m)}
+    except (TypeError, ValueError) as e:
+        return {"success": False, "error": str(e)}
 
 def emergency_stop_rover(reason="user disconnected"):
     global motor_status, sensor_servo_deployed
@@ -376,6 +397,12 @@ if HAS_SOCK:
                     elif cmd_type == "auto_mode":
                         res = handle_auto_mode(data.get("action"))
                         response.update(res)
+                    elif cmd_type == "auto_speed":
+                        res = handle_set_auto_speed(data.get("speed_pct", 70))
+                        response.update(res)
+                    elif cmd_type == "set_area":
+                        res = handle_set_area(data.get("width_m", 10), data.get("height_m", 10))
+                        response.update(res)
                     elif cmd_type == "camera_tilt":
                         angle = handle_camera_tilt(data.get("direction"))
                         response["current_angle"] = angle
@@ -485,6 +512,26 @@ def tilt_camera():
     angle = handle_camera_tilt(direction)
     broadcast_telemetry()
     return jsonify({"status": "success", "current_angle": angle})
+
+@app.route('/auto_speed', methods=['GET', 'POST'])
+def set_auto_speed_endpoint():
+    speed_pct = (request.args.get('speed_pct') or
+                 (request.json.get('speed_pct') if request.is_json else None) or 70)
+    res = handle_set_auto_speed(speed_pct)
+    broadcast_telemetry()
+    return jsonify(res), 200
+
+@app.route('/set_area', methods=['GET', 'POST'])
+def set_area_endpoint():
+    if request.is_json:
+        width_m  = request.json.get('width_m',  10)
+        height_m = request.json.get('height_m', 10)
+    else:
+        width_m  = request.args.get('width_m',  10)
+        height_m = request.args.get('height_m', 10)
+    res = handle_set_area(width_m, height_m)
+    broadcast_telemetry()
+    return jsonify(res), 200
 
 if __name__ == '__main__':
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
