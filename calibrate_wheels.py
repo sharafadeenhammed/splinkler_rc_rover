@@ -23,7 +23,7 @@ from helpers.encoder_controller import (
 from helpers.motor_controls import drive_tank, stop
 
 
-TEST_SPEED = 1
+TEST_SPEED = 0.5
 TEST_SECONDS = 1.5
 
 
@@ -101,7 +101,7 @@ def main():
     parser.add_argument("--speed", type=float, default=TEST_SPEED, help="PWM duty cycle, 0.05-0.35 (default: 0.20)")
     parser.add_argument("--seconds", type=float, default=TEST_SECONDS, help="Direction test duration (default: 1.5)")
     args = parser.parse_args()
-    speed = max(0.05, min(1, args.speed))
+    speed = max(0.05, min(0.5, args.speed))
     seconds = max(0.2, min(5.0, args.seconds))
 
     try:
@@ -112,7 +112,7 @@ def main():
             test_direction(side, speed, seconds)
         for side in ("left", "right"):
             if input(f"Measure one revolution for the {side} wheel? [y/N]: ").strip().lower() == "y":
-                measure_one_revolution(side, min(speed, 1))
+                measure_one_revolution(side, min(speed, 0.5))
     except KeyboardInterrupt:
         print("\nCalibration cancelled.")
     except Exception as exc:
