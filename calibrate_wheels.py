@@ -23,7 +23,7 @@ from helpers.encoder_controller import (
 from helpers.motor_controls import drive_tank, stop
 
 
-TEST_SPEED = 0.20
+TEST_SPEED = 0.50
 TEST_SECONDS = 1.5
 
 
