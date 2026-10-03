@@ -24,7 +24,7 @@ from helpers import (
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed, set_area,
-    get_encoder_ticks, reset_encoders
+    get_encoder_ticks, reset_encoders, encoder_config
 )
 
 app = Flask(__name__)
