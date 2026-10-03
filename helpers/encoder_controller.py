@@ -85,9 +85,9 @@ else:
 def get_encoder_ticks():
     """Returns a tuple of (left_ticks, right_ticks)"""
     if LEFT_ENCODER and RIGHT_ENCODER:
-        print("right and left encoders handelers active");
+        print("right and left encoders handelers active"); # TODO: remove this log statement
         return LEFT_ENCODER.get_ticks(), RIGHT_ENCODER.get_ticks()
-    print("left and right encoders not active.");
+    print("left and right encoders not active.") # TODO: remove this log 
     return 0, 0
 
 def reset_encoders():
