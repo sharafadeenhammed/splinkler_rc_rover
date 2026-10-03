@@ -24,4 +24,11 @@ print("running test...")
 # moistureSensor.when_pressed = handleWhenPressed
 # moistureSensor.when_released = handleWhenReleased
 
+import time
+from helpers.encoder_controller import get_encoder_ticks
+
+while True:
+    print(get_encoder_ticks())
+    time.sleep(0.3)
+
 pause()
