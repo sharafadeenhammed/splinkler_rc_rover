@@ -112,7 +112,7 @@ def main():
             test_direction(side, speed, seconds)
         for side in ("left", "right"):
             if input(f"Measure one revolution for the {side} wheel? [y/N]: ").strip().lower() == "y":
-                measure_one_revolution(side, min(speed, 0.15))
+                measure_one_revolution(side, min(speed, 1))
     except KeyboardInterrupt:
         print("\nCalibration cancelled.")
     except Exception as exc:
