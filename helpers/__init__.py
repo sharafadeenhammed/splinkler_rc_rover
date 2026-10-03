@@ -6,3 +6,4 @@ from .pump_controller import *
 from .vision_controller import *
 from .ultrasonic_controller import *
 from .auto_controller import *
+from .encoder_controller import *

@@ -1,11 +1,13 @@
 from gpiozero import LED, Button, Motor, PWMOutputDevice
 from time import sleep
+from threading import Lock
 from constants import PINOUT
 from gpiozero.pins.pigpio import PiGPIOFactory
 
 
 # initialize pin factory
 factory = PiGPIOFactory()
+_motor_lock = Lock()
 
 # left motor pin init
 LEFT_MOTOR_FORWARD  = PWMOutputDevice(PINOUT.PIN11, initial_value=0, frequency=1000, pin_factory=factory)
@@ -24,11 +26,11 @@ MOTOR_REVERSED = False
 
 
 def stop():
-    LEFT_MOTOR_FORWARD.value  = 0
-    LEFT_MOTOR_REVERSE.value  = 0
-    RIGHT_MOTOR_FORWARD.value = 0
-    RIGHT_MOTOR_REVERSE.value = 0
-    sleep(0.05)
+    with _motor_lock:
+        LEFT_MOTOR_FORWARD.value  = 0
+        LEFT_MOTOR_REVERSE.value  = 0
+        RIGHT_MOTOR_FORWARD.value = 0
+        RIGHT_MOTOR_REVERSE.value = 0
 
 
 def _drive_forward(speed):
@@ -59,6 +61,37 @@ def reverse(speed=1.0):
         _drive_forward(speed)
     else:
         _drive_reverse(speed)
+
+def drive_tank(left_speed, right_speed):
+    """
+    Independent tank-track style control.
+    Positive speeds go forward, negative go reverse.
+    """
+    # Bound speeds to -1.0 to 1.0
+    left_speed = max(-1.0, min(1.0, left_speed))
+    right_speed = max(-1.0, min(1.0, right_speed))
+
+    if MOTOR_REVERSED:
+        left_speed = -left_speed
+        right_speed = -right_speed
+
+    # Clear both legs before selecting a direction.  This avoids briefly
+    # driving both H-bridge inputs during a forward/reverse transition.
+    with _motor_lock:
+        LEFT_MOTOR_FORWARD.value = 0
+        LEFT_MOTOR_REVERSE.value = 0
+        RIGHT_MOTOR_FORWARD.value = 0
+        RIGHT_MOTOR_REVERSE.value = 0
+
+        if left_speed >= 0:
+            LEFT_MOTOR_FORWARD.value = left_speed
+        else:
+            LEFT_MOTOR_REVERSE.value = abs(left_speed)
+
+        if right_speed >= 0:
+            RIGHT_MOTOR_FORWARD.value = right_speed
+        else:
+            RIGHT_MOTOR_REVERSE.value = abs(right_speed)
 
 
 def turnRight(speed=1.0):

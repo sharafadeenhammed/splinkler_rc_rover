@@ -23,6 +23,8 @@ const autoSpeedVal = document.getElementById("autoSpeedVal");
 const autoProgressText = document.getElementById("autoProgressText");
 const autoProgressFill = document.getElementById("autoProgressFill");
 const videoFeed = document.getElementById("videoFeed");
+const valEncLeft = document.getElementById("valEncLeft");
+const valEncRight = document.getElementById("valEncRight");
 
 // Dynamic base URLs
 const baseURL = window.location.origin;
@@ -214,6 +216,8 @@ function renderTelemetry(data) {
   if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
   if (valSoil) valSoil.innerText = data.soil || 'Dry';
   if (valDist) valDist.innerText = data.distance_cm !== undefined ? `${data.distance_cm} cm` : '--';
+  if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : '0';
+  if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : '0';
 
   if (sensorReadings) {
     sensorReadings.innerHTML = `

@@ -5,6 +5,8 @@ DHT11_DIR = "/sys/bus/iio/devices/iio:device0"
 TEMP_FILE = os.path.join(DHT11_DIR, "in_temp_input")
 HUMID_FILE = os.path.join(DHT11_DIR, "in_humidityrelative_input")
 
+# the dht11 pin si PIN40
+
 def read_kernel_sensor(file_path):
   try:
     if os.path.exists(file_path):
