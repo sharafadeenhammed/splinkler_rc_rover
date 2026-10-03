@@ -23,7 +23,7 @@ from helpers.encoder_controller import (
 from helpers.motor_controls import drive_tank, stop
 
 
-TEST_SPEED = 0.50
+TEST_SPEED = 1
 TEST_SECONDS = 1.5
 
 
@@ -101,7 +101,7 @@ def main():
     parser.add_argument("--speed", type=float, default=TEST_SPEED, help="PWM duty cycle, 0.05-0.35 (default: 0.20)")
     parser.add_argument("--seconds", type=float, default=TEST_SECONDS, help="Direction test duration (default: 1.5)")
     args = parser.parse_args()
-    speed = max(0.05, min(0.35, args.speed))
+    speed = max(0.05, min(1, args.speed))
     seconds = max(0.2, min(5.0, args.seconds))
 
     try:
