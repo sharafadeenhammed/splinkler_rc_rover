@@ -1,211 +1,49 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Sprinkler RC Rover Command Center</title>
-  <meta name="description" content="Autonomous & Remote Control Sprinkler Rover Dashboard">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rover OS · Command Center</title>
+  <meta name="description" content="Sprinkler rover command center">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/index.css">
 </head>
 <body>
-  <div class="app-layout">
-    <!-- Header -->
-    <header class="app-header">
-      <div class="brand">
-        <span class="brand-icon">🚜</span>
-        <h1 class="brand-title">Rover Command Center</h1>
-      </div>
-      <div class="header-badges">
-        <div class="badge badge-ws" id="badgeWs">Link: <span id="wsStatusTxt" class="connecting">CONNECTING ⚡</span></div>
-        <div class="badge badge-motor" id="badgeMotor">Motor: <span id="statusTxt">STOPPED</span></div>
-        <div class="badge badge-mode" id="badgeMode">Mode: <span id="modeTxt">MANUAL</span></div>
-      </div>
-    </header>
+  <div class="app-shell">
+    <div class="mobile-backdrop" id="mobileBackdrop" onclick="toggleSidebar(false)"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-lockup"><div class="brand-mark">R</div><div><strong>ROVER<span>OS</span></strong><small>FIELD CONTROL</small></div></div>
+      <div class="sidebar-label">Workspace</div>
+      <nav class="side-nav"><a class="nav-link active" href="#overview"><span>▦</span> Overview</a><a class="nav-link" href="#navigation"><span>⌖</span> Navigation</a><a class="nav-link" href="#controls"><span>✣</span> Manual drive</a><a class="nav-link" href="#sensors"><span>◌</span> Sensors</a></nav>
+      <div class="sidebar-label">Quick actions</div>
+      <button class="side-action" onclick="openModal('areaModal')"><span>＋</span> Configure work area</button><button class="side-action" onclick="toggleAutoMode()"><span>◈</span> Toggle autonomy</button>
+      <div class="sidebar-foot"><div class="system-mini"><i></i><span>System online</span><small id="sidebarClock">--:--</small></div><div class="sidebar-help">Keyboard ready · <kbd>WASD</kbd> to drive</div></div>
+    </aside>
 
-    <!-- Main Dashboard Grid -->
-    <main class="dashboard-grid">
-      
-      <!-- Video Stream & Camera Pan Panel -->
-      <section class="panel video-panel">
-        <div class="panel-header">
-          <span class="panel-title">📹 Live Camera Feed</span>
-          <span class="stream-live-tag" id="streamLiveTag"><span class="pulse-dot"></span> LIVE</span>
-        </div>
-        <div class="video-container" id="videoContainer">
-          <!-- We will set the src via JS to handle reconnects -->
-          <img id="videoFeed" alt="Live Camera Stream" class="video-feed" onerror="handleVideoError()">
-        </div>
-        <div class="camera-bar">
-          <span class="cam-label">Pan Servo: <strong id="current-angle">0</strong>°</span>
-          <div class="cam-btn-group">
-            <button class="btn-cam" onclick="tiltCamera('left')">◀ Left</button>
-            <button class="btn-cam btn-center" onclick="tiltCamera('center')">Center</button>
-            <button class="btn-cam" onclick="tiltCamera('right')">Right ▶</button>
-          </div>
-        </div>
-      </section>
+    <div class="app-content">
+      <header class="topbar"><button class="mobile-menu" onclick="toggleSidebar(true)" aria-label="Open menu">☰</button><div class="page-heading"><span class="eyebrow">SPRINKLER ROVER / LIVE CONSOLE</span><h1>Command center</h1></div><div class="topbar-status"><div class="status-pill"><i class="status-dot" id="connectionDot"></i><span id="wsStatusTxt" class="connecting">CONNECTING</span></div><div class="status-pill"><span class="status-key">MODE</span><strong id="modeTxt">MANUAL</strong></div><div class="motor-state" id="badgeMotor"><span class="status-key">MOTOR</span><strong id="statusTxt">STOPPED</strong></div></div></header>
 
-      <!-- Control & Telemetry Panel -->
-      <section class="panel controls-panel">
-        
-        <!-- Telemetry Cards -->
-        <div class="telemetry-grid">
-          <div class="telemetry-card">
-            <span class="card-icon">🌡️</span>
-            <div class="card-info">
-              <span class="card-label">Temp</span>
-              <span class="card-value" id="valTemp">--</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <span class="card-icon">💧</span>
-            <div class="card-info">
-              <span class="card-label">Humidity</span>
-              <span class="card-value" id="valHumidity">--</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <span class="card-icon">🌱</span>
-            <div class="card-info">
-              <span class="card-label">Soil</span>
-              <span class="card-value" id="valSoil">Dry</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <span class="card-icon">📏</span>
-            <div class="card-info">
-              <span class="card-label">Ahead Dist</span>
-              <span class="card-value" id="valDist">-- cm</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <span class="card-icon">⚙️</span>
-            <div class="card-info">
-              <span class="card-label">Left Enc</span>
-              <span class="card-value" id="valEncLeft">0</span>
-            </div>
-          </div>
-          <div class="telemetry-card">
-            <span class="card-icon">⚙️</span>
-            <div class="card-info">
-              <span class="card-label">Right Enc</span>
-              <span class="card-value" id="valEncRight">0</span>
-            </div>
-          </div>
-        </div>
+      <main class="dashboard" id="overview">
+        <section class="welcome-row"><div><p class="eyebrow">CONTROL DECK</p><h2>Good day, operator.</h2><p class="muted">Monitor the field, tune the route, and keep every pass on course.</p></div><div class="header-actions"><button class="btn btn-ghost" onclick="openModal('areaModal')">⌖ Work area</button><button class="btn btn-primary" id="autoModeBtn" onclick="toggleAutoMode()"><span>◈</span><span id="autoStatus">START AUTONOMY</span></button></div></section>
 
-        <!-- Hidden fallback container -->
-        <div id="sensorReadings" style="display:none;"></div>
+        <section class="hero-grid"><article class="panel camera-card"><div class="panel-head"><div><span class="panel-kicker">LIVE FEED</span><h3>Field camera</h3></div><span class="live-tag"><i></i> LIVE</span></div><div class="video-frame"><img id="videoFeed" alt="Live rover camera" onerror="handleVideoError()"><div class="video-overlay"><span>CAM 01</span><span id="current-angle">0</span>° PAN</div></div><div class="camera-controls"><span class="muted">Pan control</span><div><button class="icon-btn" onclick="tiltCamera('left')">←</button><button class="camera-center" onclick="tiltCamera('center')">CENTER</button><button class="icon-btn" onclick="tiltCamera('right')">→</button></div></div></article>
+          <article class="panel map-card" id="navigation"><div class="panel-head"><div><span class="panel-kicker">LOCAL POSITION</span><h3>Navigation map</h3></div><span class="coordinate-readout" id="poseText">X 0.00 · Y 0.00</span></div><div class="map-wrap"><canvas id="roverMap" width="760" height="390"></canvas><div class="map-legend"><span><i class="legend-area"></i> Work area</span><span><i class="legend-trail"></i> Trail</span><span><i class="legend-rover"></i> Rover</span></div></div><div class="map-footer"><span class="muted">Relative coordinates · MPU6050 heading</span><button class="text-btn" onclick="openModal('areaModal')">Edit bounds →</button></div></article></section>
 
-        <!-- Auto Mode Configuration Panel -->
-        <div class="auto-config-panel">
-          <div class="auto-config-header">
-            <span class="panel-title">🤖 Autonomous Settings</span>
-            <span class="auto-progress-text" id="autoProgressText">Idle</span>
-          </div>
-          <div class="auto-progress-bar">
-            <div class="auto-progress-fill" id="autoProgressFill" style="width: 0%;"></div>
-          </div>
-          <div class="auto-config-grid">
-            <div class="config-item">
-              <label>Area Name</label>
-              <input type="text" id="areaNameInput" value="Main work area">
-            </div>
-            <div class="config-item">
-              <label>Origin X (m)</label>
-              <input type="number" id="areaOriginXInput" value="0" step="0.1">
-            </div>
-            <div class="config-item">
-              <label>Origin Y (m)</label>
-              <input type="number" id="areaOriginYInput" value="0" step="0.1">
-            </div>
-            <div class="config-item">
-              <label>Area Width (m)</label>
-              <input type="number" id="areaWidthInput" value="10.0" step="0.5" min="0.5" onchange="updateAreaSettings()">
-            </div>
-            <div class="config-item">
-              <label>Area Height (m)</label>
-              <input type="number" id="areaHeightInput" value="10.0" step="0.5" min="0.5" onchange="updateAreaSettings()">
-            </div>
-            <div class="config-item speed-config">
-              <label>Auto Cruise Speed (<span id="autoSpeedVal">70</span>%)</label>
-              <input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()">
-            </div>
-          </div>
-        </div>
+        <section class="metrics-grid" id="sensors"><article class="metric-card"><div class="metric-icon cyan">°C</div><div><span>Temperature</span><strong id="valTemp">--</strong></div><small>ambient</small></article><article class="metric-card"><div class="metric-icon blue">%</div><div><span>Humidity</span><strong id="valHumidity">--</strong></div><small>air sensor</small></article><article class="metric-card"><div class="metric-icon green">◌</div><div><span>Soil state</span><strong id="valSoil">Dry</strong></div><small>probe status</small></article><article class="metric-card"><div class="metric-icon amber">↗</div><div><span>Obstacle</span><strong id="valDist">-- cm</strong></div><small>ultrasonic</small></article><article class="metric-card"><div class="metric-icon violet">L</div><div><span>Left encoder</span><strong id="valEncLeft">0</strong></div><small>ticks</small></article><article class="metric-card"><div class="metric-icon violet">R</div><div><span>Right encoder</span><strong id="valEncRight">0</strong></div><small>ticks</small></article></section>
 
-        <div class="map-panel">
-          <div class="auto-config-header">
-            <span class="panel-title">🧭 Local Rover Map</span>
-            <span class="auto-progress-text" id="poseText">X 0.00 m · Y 0.00 m</span>
-          </div>
-          <canvas id="roverMap" width="700" height="320"></canvas>
-          <small class="map-note">Coordinates are relative to the rover’s reset/start point. MPU6050 yaw will drift without GPS or a magnetometer.</small>
-        </div>
+        <section class="lower-grid"><article class="panel autonomy-card"><div class="panel-head"><div><span class="panel-kicker">MISSION CONTROL</span><h3>Autonomous coverage</h3></div><span class="phase-badge" id="autoProgressText">IDLE</span></div><div class="progress-track"><div id="autoProgressFill" class="progress-value" style="width:0%"></div></div><div class="mission-meta"><span>Coverage progress</span><strong id="missionPercent">0%</strong></div><div class="mission-grid"><div><span>Work area</span><strong id="missionAreaLabel">Not configured</strong></div><div><span>Navigation</span><strong id="missionNavLabel">Encoder + IMU</strong></div></div><button class="btn btn-primary wide" onclick="toggleAutoMode()">◈ <span id="missionActionLabel">Start autonomous mission</span></button></article>
+          <article class="panel controls-card" id="controls"><div class="panel-head"><div><span class="panel-kicker">MANUAL OVERRIDE</span><h3>Drive control</h3></div><div><span class="mono" id="targetVal">50</span><span class="muted">%</span></div></div><div class="range-row"><span>Throttle limit</span><input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider"><output id="throttleOutput">50%</output></div><div class="drive-pad"><button class="drive-key up" id="forwardBtn" title="Forward">▲</button><button class="drive-key left" id="leftBtn" title="Left">◀</button><button class="drive-key stop" id="stopBtn" title="Emergency stop">■</button><button class="drive-key right" id="rightBtn" title="Right">▶</button><button class="drive-key down" id="reverseBtn" title="Reverse">▼</button></div><div class="control-hint"><span>Hold to drive</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>·</span><kbd>SPACE</kbd> stop</div></article></section>
 
-        <!-- Equipment Toggle Buttons -->
-        <div class="equipment-grid">
-          <button id="sensorDeployBtn" class="btn-tool btn-sensor" onclick="toggleSensorDeploy()">
-            <span class="tool-icon">🌱</span>
-            <div class="tool-text">
-              <span class="tool-title">Sensor Arm</span>
-              <span class="tool-sub" id="sensorStatus">RETRACTED (-90°)</span>
-            </div>
-          </button>
-          <button id="pumpToggleBtn" class="btn-tool btn-pump" onclick="toggleWaterPump()">
-            <span class="tool-icon">💧</span>
-            <div class="tool-text">
-              <span class="tool-title">Water Pump</span>
-              <span class="tool-sub" id="pumpStatus">OFF ⏹️</span>
-            </div>
-          </button>
-          <button id="autoModeBtn" class="btn-tool btn-auto" onclick="toggleAutoMode()">
-            <span class="tool-icon">🤖</span>
-            <div class="tool-text">
-              <span class="tool-title">Auto Mode</span>
-              <span class="tool-sub" id="autoStatus">OFF 🎮</span>
-            </div>
-          </button>
-        </div>
-
-        <!-- Driving Speed & D-Pad Section -->
-        <div class="drive-section">
-          <div class="speed-control">
-            <div class="speed-header">
-              <label for="speedSlider">Manual Limit</label>
-              <span class="speed-value"><span id="targetVal">50</span>%</span>
-            </div>
-            <input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider">
-          </div>
-
-          <div class="dpad-container">
-            <div class="dpad-grid">
-              <button class="action-btn forward-btn" id="forwardBtn" title="Forward (ArrowUp / W)">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l-8 8h6v8h4v-8h6l-8-8z"/></svg>
-              </button>
-              <button class="action-btn left-btn" id="leftBtn" title="Left (ArrowLeft / A)">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 12l8-8v6h8v4h-8v6l-8-8z"/></svg>
-              </button>
-              <button class="action-btn stop-btn" id="stopBtn" title="Emergency Stop (Space)">
-                <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
-              </button>
-              <button class="action-btn right-btn" id="rightBtn" title="Right (ArrowRight / D)">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 12l-8-8v6H4v4h8v6l8-8z"/></svg>
-              </button>
-              <button class="action-btn reverse-btn" id="reverseBtn" title="Reverse (ArrowDown / S)">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 20l8-8h-6V4h-4v8H4l8 8z"/></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-
-      </section>
-    </main>
+        <section class="equipment-row"><button class="equipment-card" id="sensorDeployBtn" onclick="toggleSensorDeploy()"><span class="equipment-icon cyan">⌄</span><span><b>Sensor arm</b><small id="sensorStatus">RETRACTED</small></span><em>›</em></button><button class="equipment-card" id="pumpToggleBtn" onclick="toggleWaterPump()"><span class="equipment-icon blue">滴</span><span><b>Water pump</b><small id="pumpStatus">OFF</small></span><em>›</em></button><button class="equipment-card" onclick="openModal('imuModal')"><span class="equipment-icon violet">⊙</span><span><b>IMU heading</b><small>Calibrate sensor</small></span><em>›</em></button></section><div id="sensorReadings" hidden></div>
+      </main>
+    </div>
   </div>
 
+  <div class="modal-backdrop" id="areaModal" onclick="if(event.target===this) closeModal('areaModal')"><div class="modal"><button class="modal-close" onclick="closeModal('areaModal')">×</button><span class="panel-kicker">NAVIGATION SETTINGS</span><h2>Define work area</h2><p class="muted">Set a local coordinate rectangle for autonomous coverage.</p><div class="form-grid"><label class="field full">Area name<input type="text" id="areaNameInput" value="Main work area"></label><label class="field">Origin X (m)<input type="number" id="areaOriginXInput" value="0" step="0.1"></label><label class="field">Origin Y (m)<input type="number" id="areaOriginYInput" value="0" step="0.1"></label><label class="field">Width (m)<input type="number" id="areaWidthInput" value="10" step="0.5" min="0.5"></label><label class="field">Height (m)<input type="number" id="areaHeightInput" value="10" step="0.5" min="0.5"></label><label class="field full">Autonomous speed · <span id="autoSpeedVal">70</span>%<input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()"></label></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('areaModal')">Cancel</button><button class="btn btn-primary" onclick="updateAreaSettings()">Save work area</button></div></div></div>
+  <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')"><div class="modal small-modal"><button class="modal-close" onclick="closeModal('imuModal')">×</button><span class="panel-kicker">INERTIAL SENSOR</span><h2>Calibrate MPU6050</h2><p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p><div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button><button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button></div></div></div>
+  <div class="toast" id="toast"></div>
   <script src="/static/index.js"></script>
 </body>
 </html>

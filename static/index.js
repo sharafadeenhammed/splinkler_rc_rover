@@ -14,6 +14,15 @@ const valSoil = document.getElementById("valSoil");
 const valDist = document.getElementById("valDist");
 const modeTxt = document.getElementById("modeTxt");
 const wsStatusTxt = document.getElementById("wsStatusTxt");
+const connectionDot = document.getElementById("connectionDot");
+const toast = document.getElementById("toast");
+const sidebar = document.getElementById("sidebar");
+const mobileBackdrop = document.getElementById("mobileBackdrop");
+const sidebarClock = document.getElementById("sidebarClock");
+const missionPercent = document.getElementById("missionPercent");
+const missionAreaLabel = document.getElementById("missionAreaLabel");
+const missionActionLabel = document.getElementById("missionActionLabel");
+const throttleOutput = document.getElementById("throttleOutput");
 
 // New Auto Config Elements
 const areaWidthInput = document.getElementById("areaWidthInput");
@@ -75,12 +84,15 @@ function updateConnectionBadge(state, text) {
   if (state === "connected") {
     wsStatusTxt.innerText = text || "ONLINE ⚡";
     wsStatusTxt.className = "connected";
+    if (connectionDot) connectionDot.className = "status-dot online";
   } else if (state === "connecting") {
     wsStatusTxt.innerText = text || "CONNECTING 🔄";
     wsStatusTxt.className = "connecting";
+    if (connectionDot) connectionDot.className = "status-dot";
   } else {
     wsStatusTxt.innerText = text || "OFFLINE ⚠️";
     wsStatusTxt.className = "disconnected";
+    if (connectionDot) connectionDot.className = "status-dot";
   }
 }
 
@@ -250,6 +262,9 @@ function renderTelemetry(data) {
     updateAutoProgressUI(data.auto_progress);
   }
   if (data.pose) renderRoverMap(data.pose, data.active_area);
+  if (data.active_area && missionAreaLabel) {
+    missionAreaLabel.innerText = `${data.active_area.name} · ${data.active_area.max_x - data.active_area.min_x} × ${data.active_area.max_y - data.active_area.min_y} m`;
+  }
 }
 
 function renderRoverMap(pose, area) {
@@ -308,11 +323,12 @@ function updateAutoProgressUI(prog) {
     if (prog.phase !== "idle") {
       text = `${prog.phase.toUpperCase()} | Strip ${prog.strip}/${prog.total_strips} | ${prog.coverage_pct}%`;
     }
-    autoProgressText.innerText = text;
+    autoProgressText.innerText = text.toUpperCase();
   }
   if (autoProgressFill) {
     autoProgressFill.style.width = `${prog.coverage_pct || 0}%`;
   }
+  if (missionPercent) missionPercent.innerText = `${Math.round(prog.coverage_pct || 0)}%`;
 }
 
 function updateSensorUI(isDeployed) {
@@ -348,15 +364,16 @@ function updateAutoUI(isAutoActive) {
   const autoBtn = document.getElementById("autoModeBtn");
   if (autoStatus && autoBtn) {
     if (isAutoActive) {
-      autoStatus.innerText = "ON 🤖";
+      autoStatus.innerText = "STOP AUTONOMY";
       autoBtn.classList.add("active");
       if (modeTxt) modeTxt.innerText = "AUTONOMOUS 🤖";
     } else {
-      autoStatus.innerText = "OFF 🎮";
+      autoStatus.innerText = "START AUTONOMY";
       autoBtn.classList.remove("active");
       if (modeTxt) modeTxt.innerText = "MANUAL 🎮";
     }
   }
+  if (missionActionLabel) missionActionLabel.innerText = isAutoActive ? "Stop autonomous mission" : "Start autonomous mission";
 }
 
 // ----------------- Command Handlers (WS with HTTP Fallback) -----------------
@@ -434,11 +451,17 @@ function updateAreaSettings() {
   const ox = parseFloat(areaOriginXInput.value || 0);
   const oy = parseFloat(areaOriginYInput.value || 0);
   const name = areaNameInput.value || "Work area";
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+    showToast("Enter a valid work area size");
+    return;
+  }
   const sent = sendWSCommand({ type: "set_area", width_m: w, height_m: h, origin_x: ox, origin_y: oy, name });
   if (!sent) {
     fetch(`${baseURL}/set_area?width_m=${w}&height_m=${h}&origin_x=${ox}&origin_y=${oy}&name=${encodeURIComponent(name)}`)
       .catch(err => console.error("Area HTTP error:", err));
   }
+  closeModal("areaModal");
+  showToast("Work area saved");
 }
 
 function updateAutoSpeed() {
@@ -457,11 +480,50 @@ if (slider) {
   slider.oninput = function () {
     targetSpeed = this.value;
     if (targetVal) targetVal.innerHTML = targetSpeed;
+    if (throttleOutput) throttleOutput.innerText = `${targetSpeed}%`;
     if (activeDirection) {
       sendHardwareCommand(targetSpeed, activeDirection);
     }
   };
 }
+
+function toggleSidebar(open) {
+  if (sidebar) sidebar.classList.toggle("open", open);
+  if (mobileBackdrop) mobileBackdrop.classList.toggle("open", open);
+}
+
+function openModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.add("open");
+}
+
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove("open");
+}
+
+function showToast(message) {
+  if (!toast) return;
+  toast.innerText = message;
+  toast.classList.add("show");
+  clearTimeout(window.roverToastTimer);
+  window.roverToastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
+}
+
+function calibrateIMU() {
+  showToast("Keep the rover still — calibrating…");
+  fetch(`${baseURL}/api/imu/calibrate`, { method: "POST" })
+    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      closeModal("imuModal");
+      showToast(ok ? "MPU6050 calibrated" : (data.error || "Calibration failed"));
+    })
+    .catch(() => showToast("Unable to reach the rover"));
+}
+
+setInterval(() => {
+  if (sidebarClock) sidebarClock.innerText = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}, 1000);
 
 function setupButton(buttonElement, directionName) {
   if (!buttonElement) return;
