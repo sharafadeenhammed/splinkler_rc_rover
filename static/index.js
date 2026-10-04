@@ -22,6 +22,11 @@ const autoSpeedSlider = document.getElementById("autoSpeedSlider");
 const autoSpeedVal = document.getElementById("autoSpeedVal");
 const autoProgressText = document.getElementById("autoProgressText");
 const autoProgressFill = document.getElementById("autoProgressFill");
+const areaNameInput = document.getElementById("areaNameInput");
+const areaOriginXInput = document.getElementById("areaOriginXInput");
+const areaOriginYInput = document.getElementById("areaOriginYInput");
+const roverMap = document.getElementById("roverMap");
+const poseText = document.getElementById("poseText");
 const videoFeed = document.getElementById("videoFeed");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
@@ -33,6 +38,7 @@ const wsURL = `${wsProtocol}//${window.location.host}/ws`;
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
+const poseTrail = [];
 
 // WebSocket state
 let ws = null;
@@ -243,6 +249,57 @@ function renderTelemetry(data) {
   if (data.auto_progress) {
     updateAutoProgressUI(data.auto_progress);
   }
+  if (data.pose) renderRoverMap(data.pose, data.active_area);
+}
+
+function renderRoverMap(pose, area) {
+  if (!roverMap || !pose) return;
+  const ctx = roverMap.getContext("2d");
+  const w = roverMap.width;
+  const h = roverMap.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#08111f";
+  ctx.fillRect(0, 0, w, h);
+
+  const bounds = area || { min_x: -5, min_y: -5, max_x: 5, max_y: 5 };
+  const pad = 28;
+  const spanX = Math.max(1, bounds.max_x - bounds.min_x);
+  const spanY = Math.max(1, bounds.max_y - bounds.min_y);
+  const scale = Math.min((w - pad * 2) / spanX, (h - pad * 2) / spanY);
+  const sx = (x) => pad + (x - bounds.min_x) * scale;
+  const sy = (y) => h - pad - (y - bounds.min_y) * scale;
+
+  ctx.strokeStyle = "rgba(56,189,248,.8)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(sx(bounds.min_x), sy(bounds.max_y), spanX * scale, spanY * scale);
+  ctx.strokeStyle = "rgba(148,163,184,.18)";
+  ctx.lineWidth = 1;
+  for (let x = Math.ceil(bounds.min_x); x <= bounds.max_x; x++) {
+    ctx.beginPath(); ctx.moveTo(sx(x), pad); ctx.lineTo(sx(x), h - pad); ctx.stroke();
+  }
+  for (let y = Math.ceil(bounds.min_y); y <= bounds.max_y; y++) {
+    ctx.beginPath(); ctx.moveTo(pad, sy(y)); ctx.lineTo(w - pad, sy(y)); ctx.stroke();
+  }
+
+  poseTrail.push({ x: pose.x_m, y: pose.y_m });
+  if (poseTrail.length > 1000) poseTrail.shift();
+  ctx.strokeStyle = "#a78bfa";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  poseTrail.forEach((p, i) => i ? ctx.lineTo(sx(p.x), sy(p.y)) : ctx.moveTo(sx(p.x), sy(p.y)));
+  ctx.stroke();
+
+  const rx = sx(pose.x_m), ry = sy(pose.y_m);
+  const angle = -((pose.heading_deg || 0) * Math.PI / 180);
+  ctx.save();
+  ctx.translate(rx, ry); ctx.rotate(angle);
+  ctx.fillStyle = "#22c55e";
+  ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-9, -7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(`${pose.x_m.toFixed(2)} m, ${pose.y_m.toFixed(2)} m`, Math.min(w - 150, rx + 12), Math.max(14, ry - 12));
+  if (poseText) poseText.innerText = `X ${pose.x_m.toFixed(2)} m · Y ${pose.y_m.toFixed(2)} m · ${pose.heading_deg.toFixed(1)}°`;
 }
 
 function updateAutoProgressUI(prog) {
@@ -374,9 +431,12 @@ function tiltCamera(direction) {
 function updateAreaSettings() {
   const w = parseFloat(areaWidthInput.value);
   const h = parseFloat(areaHeightInput.value);
-  const sent = sendWSCommand({ type: "set_area", width_m: w, height_m: h });
+  const ox = parseFloat(areaOriginXInput.value || 0);
+  const oy = parseFloat(areaOriginYInput.value || 0);
+  const name = areaNameInput.value || "Work area";
+  const sent = sendWSCommand({ type: "set_area", width_m: w, height_m: h, origin_x: ox, origin_y: oy, name });
   if (!sent) {
-    fetch(`${baseURL}/set_area?width_m=${w}&height_m=${h}`)
+    fetch(`${baseURL}/set_area?width_m=${w}&height_m=${h}&origin_x=${ox}&origin_y=${oy}&name=${encodeURIComponent(name)}`)
       .catch(err => console.error("Area HTTP error:", err));
   }
 }

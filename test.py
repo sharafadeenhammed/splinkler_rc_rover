@@ -1,8 +1,8 @@
-from helpers import MOISTURE_SENSOR
+# from helpers import MOISTURE_SENSOR
 # from gpiozero import LED
 # from gpiozero import Button
 # from constants import PINOUT
-from signal import pause
+# from signal import pause
 
 
 # moistureSensor = Button(PINOUT.PIN18)

@@ -672,6 +672,40 @@ html, body {
   outline: none;
 }
 
+.config-item input[type="text"] {
+  background: rgba(2, 6, 23, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f1f5f9;
+  padding: 6px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.map-panel {
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+#roverMap {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 8px;
+  border-radius: 8px;
+}
+
+.map-note {
+  display: block;
+  margin-top: 6px;
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
 .config-item input[type="number"]:focus {
   border-color: #38bdf8;
 }

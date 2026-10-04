@@ -32,6 +32,7 @@ from helpers.encoder_controller  import (
     get_encoder_ticks, reset_encoders, LEFT_ENCODER, RIGHT_ENCODER,
     COUNTS_PER_OUTPUT_REV,
 )
+from helpers.mpu6050 import get_imu_snapshot, reset_imu_heading
 
 # ─── Thread / mode state ──────────────────────────────────────────────────────
 auto_mode_active   = False
@@ -42,7 +43,7 @@ auto_lock          = threading.Lock()
 # All measurements in metres.
 AREA_WIDTH_M       = 10.0   # how far the rover travels on each straight strip
 AREA_HEIGHT_M      = 10.0   # total depth of the area to be covered
-ROVER_WIDTH_M      = 0.50   # physical rover width  (determines strip spacing)
+ROVER_WIDTH_M      = 0.30   # physical rover width  (determines strip spacing)
 ROVER_LENGTH_M     = 0.70   # physical rover length
 
 # ─── Speed ────────────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ TICKS_PER_90_TURN = int((math.pi / 2.0) * (WHEEL_TRACK_M / 2.0) / METRES_PER_TIC
 PID_KP = 0.005   # proportional gain: how aggressively to correct drift
 PID_KI = 0.0001  # integral gain:     correct persistent slight bias
 PID_KD = 0.002   # derivative gain:   dampen oscillations
+IMU_HEADING_KP = 0.35  # duty-cycle correction per radian of heading drift
 
 # ─── Obstacle avoidance ───────────────────────────────────────────────────────
 OBSTACLE_THRESHOLD_CM   = 20.0
@@ -201,6 +203,7 @@ def _drive_straight(target_metres: float, check_obstacle=True,
     integral   = 0
 
     base_speed = AUTO_DRIVE_SPEED
+    target_heading = get_imu_snapshot().get("heading_rad", 0.0)
 
     while auto_mode_active:
         lt, rt = get_encoder_ticks()
@@ -234,6 +237,10 @@ def _drive_straight(target_metres: float, check_obstacle=True,
         prev_error = error
 
         correction = (PID_KP * error) + (PID_KI * integral) + (PID_KD * derivative)
+        imu = get_imu_snapshot()
+        if imu.get("available"):
+            heading_error = (imu["heading_rad"] - target_heading + math.pi) % (2 * math.pi) - math.pi
+            correction += IMU_HEADING_KP * heading_error
 
         left_speed  = base_speed - correction
         right_speed = base_speed + correction
@@ -355,6 +362,7 @@ def _drive_distance(metres: float, check_fn=None) -> bool:
     prev_error = 0
     integral   = 0
     base_speed = AUTO_DRIVE_SPEED
+    target_heading = get_imu_snapshot().get("heading_rad", 0.0)
 
     while auto_mode_active:
         lt, rt = get_encoder_ticks()
@@ -367,6 +375,10 @@ def _drive_distance(metres: float, check_fn=None) -> bool:
         derivative = error - prev_error
         prev_error = error
         correction = (PID_KP * error) + (PID_KI * integral) + (PID_KD * derivative)
+        imu = get_imu_snapshot()
+        if imu.get("available"):
+            heading_error = (imu["heading_rad"] - target_heading + math.pi) % (2 * math.pi) - math.pi
+            correction += IMU_HEADING_KP * heading_error
 
         left_speed  = max(0.15, min(1.0, base_speed - correction))
         right_speed = max(0.15, min(1.0, base_speed + correction))
@@ -590,6 +602,7 @@ def start_auto_mode():
     with auto_lock:
         if not auto_mode_active:
             auto_mode_active = True
+            reset_imu_heading()
             auto_thread = threading.Thread(target=autonomous_routine, daemon=True)
             auto_thread.start()
             return True

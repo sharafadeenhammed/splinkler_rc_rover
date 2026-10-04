@@ -26,6 +26,9 @@ from helpers import (
     get_auto_progress, set_auto_speed, set_area,
     get_encoder_ticks, reset_encoders, encoder_config
 )
+from helpers.mpu6050 import get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading
+from helpers.navigation_database import DB, PoseTracker
+from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
 
 app = Flask(__name__)
 sock = Sock(app) if HAS_SOCK else None
@@ -42,6 +45,27 @@ sensor_data = {
 data_lock = threading.Lock()
 clients_lock = threading.Lock()
 connected_clients = set()
+pose_tracker = PoseTracker(DB, WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
+current_run_id = None
+
+
+def navigation_loop():
+  """Update local pose and persist navigation telemetry at 20 Hz."""
+  global current_run_id
+  print("🧭 Navigation loop started.")
+  while True:
+    try:
+      imu = update_imu()
+      left_ticks, right_ticks = get_encoder_ticks()
+      pose_tracker.update(left_ticks, right_ticks, imu)
+      if not is_auto_active() and pose_tracker.run_id:
+        DB.finish_run(pose_tracker.run_id, "stopped")
+        pose_tracker.run_id = None
+        current_run_id = None
+      time.sleep(0.05)
+    except Exception as exc:
+      print(f"⚠️ Navigation update error: {exc}")
+      time.sleep(1.0)
 
 def read_sensor_loop():
   print("🛰️ Sensor background thread successfully started.")
@@ -56,7 +80,7 @@ def read_sensor_loop():
         if temp: sensor_data["temperature"] = temp
         if humidity: sensor_data["humidity"] = humidity
         if temp or humidity: sensor_data["last_updated"] = time.strftime("%y-%m-%d %H:%M:%S")
-                
+      time.sleep(1.0)
     except Exception as e:
       print(f"⚠️ Sensor read error: {e}")
       # Sensor chips (like DHT22 or BME280) should not be polled faster than 1-2 seconds.
@@ -189,12 +213,29 @@ def handle_water_pump(action=None):
     }
 
 def handle_auto_mode(action=None):
+    global current_run_id
     if action == "start":
         active = start_auto_mode()
+        if active and current_run_id is None:
+            area = DB.active_area()
+            current_run_id = DB.start_run(area["id"] if area else None)
+            pose_tracker.run_id = current_run_id
     elif action == "stop":
         active = stop_auto_mode()
+        if current_run_id is not None:
+            DB.finish_run(current_run_id, "stopped")
+            current_run_id = None
+            pose_tracker.run_id = None
     elif action == "toggle" or not action:
         active = toggle_auto_mode()
+        if active and current_run_id is None:
+            area = DB.active_area()
+            current_run_id = DB.start_run(area["id"] if area else None)
+            pose_tracker.run_id = current_run_id
+        elif not active and current_run_id is not None:
+            DB.finish_run(current_run_id, "stopped")
+            current_run_id = None
+            pose_tracker.run_id = None
     elif action == "status":
         active = is_auto_active()
     else:
@@ -254,6 +295,9 @@ def get_telemetry_payload():
     payload["encoder_left"] = lt
     payload["encoder_right"] = rt
     payload["encoder_config"] = encoder_config()
+    payload["imu"] = get_imu_snapshot()
+    payload["pose"] = pose_tracker.snapshot()
+    payload["active_area"] = DB.active_area()
     payload["success"] = True
     return payload
 
@@ -268,11 +312,16 @@ def handle_set_auto_speed(speed_pct):
         return {"success": False, "error": str(e)}
 
 
-def handle_set_area(width_m, height_m):
+def handle_set_area(width_m, height_m, origin_x=0, origin_y=0, name="Work area"):
     """Set coverage area dimensions in metres."""
     try:
-        set_area(float(width_m), float(height_m))
-        return {"success": True, "area_width_m": float(width_m), "area_height_m": float(height_m)}
+        width_m, height_m = float(width_m), float(height_m)
+        origin_x, origin_y = float(origin_x), float(origin_y)
+        set_area(width_m, height_m)
+        area = DB.save_area(name, origin_x, origin_y, origin_x + width_m, origin_y + height_m)
+        if not is_auto_active():
+            pose_tracker.reset(origin_x, origin_y, 0.0)
+        return {"success": True, "area_width_m": width_m, "area_height_m": height_m, "area": area}
     except (TypeError, ValueError) as e:
         return {"success": False, "error": str(e)}
 
@@ -342,6 +391,11 @@ def initialize_background_threads():
         bg_thread.start()
         app.sensor_thread_started = True
 
+    if not getattr(app, 'navigation_thread_started', False):
+        nav_thread = threading.Thread(target=navigation_loop, daemon=True)
+        nav_thread.start()
+        app.navigation_thread_started = True
+
     if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
         ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
         ws_thread.start()
@@ -406,7 +460,11 @@ if HAS_SOCK:
                         res = handle_set_auto_speed(data.get("speed_pct", 70))
                         response.update(res)
                     elif cmd_type == "set_area":
-                        res = handle_set_area(data.get("width_m", 10), data.get("height_m", 10))
+                        res = handle_set_area(
+                            data.get("width_m", 10), data.get("height_m", 10),
+                            data.get("origin_x", 0), data.get("origin_y", 0),
+                            data.get("name", "Work area"),
+                        )
                         response.update(res)
                     elif cmd_type == "camera_tilt":
                         angle = handle_camera_tilt(data.get("direction"))
@@ -534,9 +592,46 @@ def set_area_endpoint():
     else:
         width_m  = request.args.get('width_m',  10)
         height_m = request.args.get('height_m', 10)
-    res = handle_set_area(width_m, height_m)
+    origin_x = request.args.get('origin_x', 0) if not request.is_json else request.json.get('origin_x', 0)
+    origin_y = request.args.get('origin_y', 0) if not request.is_json else request.json.get('origin_y', 0)
+    name = request.args.get('name', 'Work area') if not request.is_json else request.json.get('name', 'Work area')
+    res = handle_set_area(width_m, height_m, origin_x, origin_y, name)
     broadcast_telemetry()
     return jsonify(res), 200
+
+
+@app.route('/api/areas', methods=['GET'])
+def list_work_areas():
+    return jsonify({"success": True, "areas": DB.list_areas()}), 200
+
+
+@app.route('/api/areas/<int:area_id>', methods=['GET'])
+def get_work_area(area_id):
+    area = DB.get_area(area_id)
+    if not area:
+        return jsonify({"success": False, "error": "Area not found"}), 404
+    return jsonify({"success": True, "area": area}), 200
+
+
+@app.route('/api/imu/calibrate', methods=['POST'])
+def calibrate_imu_endpoint():
+    if is_auto_active() or motor_status != "STOPPED":
+        return jsonify({"success": False, "error": "Stop the rover before calibrating the MPU6050"}), 409
+    ok = calibrate_imu()
+    reset_imu_heading()
+    return jsonify({"success": ok, "imu": get_imu_snapshot()}), (200 if ok else 503)
+
+
+@app.route('/api/telemetry', methods=['GET'])
+def navigation_history():
+    run_id = request.args.get('run_id', type=int)
+    limit = request.args.get('limit', default=500, type=int)
+    return jsonify({"success": True, "telemetry": DB.recent_telemetry(run_id, limit)}), 200
+
+
+@app.route('/api/runs', methods=['GET'])
+def navigation_runs():
+    return jsonify({"success": True, "runs": DB.recent_runs()}), 200
 
 if __name__ == '__main__':
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
