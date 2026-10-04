@@ -8,6 +8,7 @@ import time
 
 
 DB_PATH = os.environ.get("ROVER_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "rover.db"))
+print(" ---- ---- ---- db path -- ", DB_PATH)
 
 
 class NavigationDatabase:
