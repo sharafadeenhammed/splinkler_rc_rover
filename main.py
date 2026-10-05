@@ -31,6 +31,7 @@ from helpers import (
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed, set_area,
+    set_area_polygon,
     get_encoder_ticks, reset_encoders, encoder_config
 )
 from helpers.mpu6050 import get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading
@@ -52,8 +53,15 @@ sensor_data = {
 data_lock = threading.Lock()
 clients_lock = threading.Lock()
 connected_clients = set()
+MAX_WS_CLIENTS = 2
 pose_tracker = PoseTracker(DB, WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
 current_run_id = None
+saved_area = DB.active_area()
+if saved_area and len(saved_area.get("polygon", [])) >= 3:
+    try:
+        set_area_polygon(saved_area["polygon"])
+    except (TypeError, ValueError):
+        pass
 
 # Cache for the active work area so telemetry doesn't hit the database every build.
 _area_cache = {"value": None, "ts": 0.0}
@@ -121,7 +129,7 @@ def generate_frames():
     ]
     
     # Spawn the process and capture stdout
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     
     buffer = b""
     last_vision = 0.0   # throttle vision analysis (2 frames/sec instead of every frame)
@@ -129,13 +137,13 @@ def generate_frames():
         while True:
             chunk = process.stdout.read1(32768)
             if not chunk:
-                # If the process terminates, check stderr logs
-                stderr_data = process.stderr.read()
-                if stderr_data:
-                    print(f"Camera Process Error: {stderr_data.decode()}")
                 break
                 
             buffer += chunk
+            # Bound an incomplete/malformed camera stream so it cannot consume
+            # the Pi's memory indefinitely.
+            if len(buffer) > 512 * 1024:
+                buffer = buffer[-128 * 1024:]
             
             # Extract distinct JPEG frames out of the stream buffer
             while b'\xff\xd8' in buffer:
@@ -430,6 +438,13 @@ def initialize_background_threads():
 if HAS_SOCK:
     @sock.route('/ws')
     def ws_handler(ws):
+        with clients_lock:
+            if len(connected_clients) >= MAX_WS_CLIENTS:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+                return
         client = WSClientWrapper(ws)
         with clients_lock:
             connected_clients.add(client)
@@ -628,6 +643,19 @@ def set_area_endpoint():
 @app.route('/api/areas', methods=['GET'])
 def list_work_areas():
     return jsonify({"success": True, "areas": DB.list_areas()}), 200
+
+
+@app.route('/api/areas/polygon', methods=['POST'])
+def save_polygon_work_area():
+    payload = request.get_json(silent=True) or {}
+    try:
+        points = payload.get("points", [])
+        area = DB.save_polygon_area(payload.get("name", "Work area"), points)
+        set_area_polygon(points)
+        _area_cache["ts"] = 0.0
+        return jsonify({"success": True, "area": area, "coverage_mode": "polygon"}), 201
+    except (TypeError, ValueError, KeyError, IndexError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @app.route('/api/areas/<int:area_id>', methods=['GET'])

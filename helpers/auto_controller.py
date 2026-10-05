@@ -45,6 +45,7 @@ AREA_WIDTH_M       = 10.0   # how far the rover travels on each straight strip
 AREA_HEIGHT_M      = 10.0   # total depth of the area to be covered
 ROVER_WIDTH_M      = 0.30   # physical rover width  (determines strip spacing)
 ROVER_LENGTH_M     = 0.70   # physical rover length
+AREA_POLYGON       = []     # optional local-coordinate boundary [[x, y], ...]
 
 # ─── Speed ────────────────────────────────────────────────────────────────────
 AUTO_DRIVE_SPEED   = 0.70   # 0.0 – 1.0  duty-cycle fraction while cruising
@@ -99,10 +100,24 @@ def set_auto_speed(speed_0_to_100: float):
 
 def set_area(width_m: float, height_m: float):
     """Set the target coverage area dimensions (metres)."""
-    global AREA_WIDTH_M, AREA_HEIGHT_M
+    global AREA_WIDTH_M, AREA_HEIGHT_M, AREA_POLYGON
     AREA_WIDTH_M  = max(0.5, width_m)
     AREA_HEIGHT_M = max(0.5, height_m)
+    AREA_POLYGON = [[0.0, 0.0], [AREA_WIDTH_M, 0.0], [AREA_WIDTH_M, AREA_HEIGHT_M], [0.0, AREA_HEIGHT_M]]
     print(f"🗺️  Coverage area set to {AREA_WIDTH_M:.1f} m × {AREA_HEIGHT_M:.1f} m")
+
+
+def set_area_polygon(points):
+    """Load a saved map polygon for autonomous coverage."""
+    global AREA_WIDTH_M, AREA_HEIGHT_M, AREA_POLYGON
+    polygon = [[float(point[0]), float(point[1])] for point in points]
+    if len(polygon) < 3:
+        raise ValueError("A polygon needs at least three points")
+    AREA_WIDTH_M = max(x for x, _ in polygon) - min(x for x, _ in polygon)
+    AREA_HEIGHT_M = max(y for _, y in polygon) - min(y for _, y in polygon)
+    if AREA_WIDTH_M <= 0 or AREA_HEIGHT_M <= 0:
+        raise ValueError("The polygon must have width and height")
+    AREA_POLYGON = polygon
 
 def set_rover_size(width_m: float, length_m: float):
     """Update rover physical dimensions (affects strip spacing)."""
@@ -168,6 +183,31 @@ def _update_tick_telemetry():
     lt, rt = get_encoder_ticks()
     auto_progress["left_ticks"]  = lt
     auto_progress["right_ticks"] = rt
+
+
+def _coverage_segments():
+    """Return horizontal scan-line widths that fall inside the boundary."""
+    if len(AREA_POLYGON) < 3:
+        return [(AREA_WIDTH_M, 0.0)] * max(1, math.ceil(AREA_HEIGHT_M / ROVER_WIDTH_M))
+    min_y = min(point[1] for point in AREA_POLYGON)
+    max_y = max(point[1] for point in AREA_POLYGON)
+    segments = []
+    y = min_y + ROVER_WIDTH_M / 2.0
+    while y < max_y:
+        intersections = []
+        for index, first in enumerate(AREA_POLYGON):
+            second = AREA_POLYGON[(index + 1) % len(AREA_POLYGON)]
+            if (first[1] <= y < second[1]) or (second[1] <= y < first[1]):
+                if second[1] != first[1]:
+                    x = first[0] + (y - first[1]) * (second[0] - first[0]) / (second[1] - first[1])
+                    intersections.append(x)
+        intersections.sort()
+        for index in range(0, len(intersections) - 1, 2):
+            width = intersections[index + 1] - intersections[index]
+            if width > 0.10:
+                segments.append((width, y))
+        y += ROVER_WIDTH_M
+    return segments or [(AREA_WIDTH_M, min_y)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -496,7 +536,8 @@ def autonomous_routine():
     """
     global auto_mode_active, auto_progress
 
-    total_strips = max(1, math.ceil(AREA_HEIGHT_M / ROVER_WIDTH_M))
+    coverage_segments = _coverage_segments()
+    total_strips = len(coverage_segments)
     auto_progress["total_strips"] = total_strips
     auto_progress["strip"]        = 0
     auto_progress["phase"]        = "driving"
@@ -519,7 +560,8 @@ def autonomous_routine():
         auto_progress["phase"] = "driving"
 
         # ── Drive the full strip, handling obstacles along the way ────────
-        remaining_m = AREA_WIDTH_M
+        segment_width, _segment_y = coverage_segments[strip]
+        remaining_m = segment_width
         distance_since_soil_check = 0.0
 
         while auto_mode_active and remaining_m > 0.01:
@@ -638,6 +680,7 @@ __all__ = [
     "get_auto_progress",
     "set_auto_speed",
     "set_area",
+    "set_area_polygon",
     "set_rover_size",
     "enable_ultrasonic_in_auto",
     "disable_ultrasonic_in_auto",

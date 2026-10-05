@@ -25,15 +25,11 @@ const missionActionLabel = document.getElementById("missionActionLabel");
 const throttleOutput = document.getElementById("throttleOutput");
 
 // New Auto Config Elements
-const areaWidthInput = document.getElementById("areaWidthInput");
-const areaHeightInput = document.getElementById("areaHeightInput");
 const autoSpeedSlider = document.getElementById("autoSpeedSlider");
 const autoSpeedVal = document.getElementById("autoSpeedVal");
 const autoProgressText = document.getElementById("autoProgressText");
 const autoProgressFill = document.getElementById("autoProgressFill");
 const areaNameInput = document.getElementById("areaNameInput");
-const areaOriginXInput = document.getElementById("areaOriginXInput");
-const areaOriginYInput = document.getElementById("areaOriginYInput");
 const roverMap = document.getElementById("roverMap");
 const poseText = document.getElementById("poseText");
 const videoFeed = document.getElementById("videoFeed");
@@ -48,6 +44,10 @@ const wsURL = `${wsProtocol}//${window.location.host}/ws`;
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
 const poseTrail = [];
+let polygonDraft = [];
+let mapDrawing = false;
+let mapBounds = { min_x: -5, min_y: -5, max_x: 5, max_y: 5 };
+let lastPose = null;
 
 // WebSocket state
 let ws = null;
@@ -276,7 +276,10 @@ function renderRoverMap(pose, area) {
   ctx.fillStyle = "#08111f";
   ctx.fillRect(0, 0, w, h);
 
+  lastPose = pose;
   const bounds = area || { min_x: -5, min_y: -5, max_x: 5, max_y: 5 };
+  mapBounds = bounds;
+  if (area) window.activeWorkArea = area;
   const pad = 28;
   const spanX = Math.max(1, bounds.max_x - bounds.min_x);
   const spanY = Math.max(1, bounds.max_y - bounds.min_y);
@@ -286,7 +289,16 @@ function renderRoverMap(pose, area) {
 
   ctx.strokeStyle = "rgba(56,189,248,.8)";
   ctx.lineWidth = 2;
-  ctx.strokeRect(sx(bounds.min_x), sy(bounds.max_y), spanX * scale, spanY * scale);
+  if (area && Array.isArray(area.polygon) && area.polygon.length >= 3) {
+    ctx.beginPath();
+    area.polygon.forEach((point, i) => i ? ctx.lineTo(sx(point[0]), sy(point[1])) : ctx.moveTo(sx(point[0]), sy(point[1])));
+    ctx.closePath();
+    ctx.fillStyle = "rgba(57,217,208,.08)";
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    ctx.strokeRect(sx(bounds.min_x), sy(bounds.max_y), spanX * scale, spanY * scale);
+  }
   ctx.strokeStyle = "rgba(148,163,184,.18)";
   ctx.lineWidth = 1;
   for (let x = Math.ceil(bounds.min_x); x <= bounds.max_x; x++) {
@@ -297,12 +309,26 @@ function renderRoverMap(pose, area) {
   }
 
   poseTrail.push({ x: pose.x_m, y: pose.y_m });
-  if (poseTrail.length > 1000) poseTrail.shift();
+  if (poseTrail.length > 300) poseTrail.shift();
   ctx.strokeStyle = "#a78bfa";
   ctx.lineWidth = 2;
   ctx.beginPath();
   poseTrail.forEach((p, i) => i ? ctx.lineTo(sx(p.x), sy(p.y)) : ctx.moveTo(sx(p.x), sy(p.y)));
   ctx.stroke();
+
+  if (polygonDraft.length) {
+    ctx.strokeStyle = "#f2ba66";
+    ctx.fillStyle = "rgba(242,186,102,.12)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    polygonDraft.forEach((point, i) => i ? ctx.lineTo(sx(point[0]), sy(point[1])) : ctx.moveTo(sx(point[0]), sy(point[1])));
+    if (polygonDraft.length >= 3) ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    polygonDraft.forEach((point) => {
+      ctx.fillStyle = "#f2ba66";
+      ctx.beginPath(); ctx.arc(sx(point[0]), sy(point[1]), 4, 0, Math.PI * 2); ctx.fill();
+    });
+  }
 
   const rx = sx(pose.x_m), ry = sy(pose.y_m);
   const angle = -((pose.heading_deg || 0) * Math.PI / 180);
@@ -315,6 +341,77 @@ function renderRoverMap(pose, area) {
   ctx.font = "12px sans-serif";
   ctx.fillText(`${pose.x_m.toFixed(2)} m, ${pose.y_m.toFixed(2)} m`, Math.min(w - 150, rx + 12), Math.max(14, ry - 12));
   if (poseText) poseText.innerText = `X ${pose.x_m.toFixed(2)} m · Y ${pose.y_m.toFixed(2)} m · ${pose.heading_deg.toFixed(1)}°`;
+}
+
+function mapToWorld(event) {
+  const rect = roverMap.getBoundingClientRect();
+  const px = (event.clientX - rect.left) * (roverMap.width / rect.width);
+  const py = (event.clientY - rect.top) * (roverMap.height / rect.height);
+  const pad = 28;
+  const spanX = Math.max(1, mapBounds.max_x - mapBounds.min_x);
+  const spanY = Math.max(1, mapBounds.max_y - mapBounds.min_y);
+  const scale = Math.min((roverMap.width - pad * 2) / spanX, (roverMap.height - pad * 2) / spanY);
+  return [
+    Number((mapBounds.min_x + (px - pad) / scale).toFixed(2)),
+    Number((mapBounds.min_y + (roverMap.height - pad - py) / scale).toFixed(2)),
+  ];
+}
+
+function toggleMapDrawing() {
+  mapDrawing = !mapDrawing;
+  const button = document.getElementById("drawAreaBtn");
+  const hint = document.getElementById("drawHint");
+  if (button) button.classList.toggle("active", mapDrawing);
+  if (hint) hint.innerText = mapDrawing ? "Click 3 or more points around the work area" : "Draw a boundary by clicking map points";
+  if (roverMap) roverMap.classList.toggle("drawing", mapDrawing);
+}
+
+function undoPolygonPoint() {
+  polygonDraft.pop();
+  const hint = document.getElementById("drawHint");
+  if (hint) hint.innerText = polygonDraft.length ? `${polygonDraft.length} point${polygonDraft.length === 1 ? "" : "s"} selected · add at least 3` : "Draw a boundary by clicking map points";
+  if (lastPose) renderRoverMap(lastPose, window.activeWorkArea);
+}
+
+function clearPolygon() {
+  polygonDraft = [];
+  const hint = document.getElementById("drawHint");
+  if (hint) hint.innerText = "Draw a boundary by clicking map points";
+  if (lastPose) renderRoverMap(lastPose, window.activeWorkArea);
+}
+
+function savePolygonArea() {
+  if (polygonDraft.length < 3) {
+    showToast("Add at least three boundary points");
+    return;
+  }
+  const name = (areaNameInput && areaNameInput.value) || "Map work area";
+  fetch(`${baseURL}/api/areas/polygon`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, points: polygonDraft }),
+  }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) throw new Error(data.error || "Could not save boundary");
+      polygonDraft = [];
+      mapDrawing = false;
+      const button = document.getElementById("drawAreaBtn");
+      if (button) button.classList.remove("active");
+      window.activeWorkArea = data.area;
+      if (lastPose) renderRoverMap(lastPose, data.area);
+      showToast("Multi-coordinate work area saved");
+    })
+    .catch((error) => showToast(error.message));
+}
+
+if (roverMap) {
+  roverMap.addEventListener("click", (event) => {
+    if (!mapDrawing) return;
+    polygonDraft.push(mapToWorld(event));
+    const hint = document.getElementById("drawHint");
+    if (hint) hint.innerText = `${polygonDraft.length} point${polygonDraft.length === 1 ? "" : "s"} selected · add at least 3`;
+    if (lastPose) renderRoverMap(lastPose, window.activeWorkArea);
+  });
 }
 
 function updateAutoProgressUI(prog) {
@@ -441,27 +538,6 @@ function tiltCamera(direction) {
       })
       .catch((err) => console.error("Camera tilt HTTP error:", err));
   }
-}
-
-// ----------------- Autonomous Config Updaters -----------------
-
-function updateAreaSettings() {
-  const w = parseFloat(areaWidthInput.value);
-  const h = parseFloat(areaHeightInput.value);
-  const ox = parseFloat(areaOriginXInput.value || 0);
-  const oy = parseFloat(areaOriginYInput.value || 0);
-  const name = areaNameInput.value || "Work area";
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
-    showToast("Enter a valid work area size");
-    return;
-  }
-  const sent = sendWSCommand({ type: "set_area", width_m: w, height_m: h, origin_x: ox, origin_y: oy, name });
-  if (!sent) {
-    fetch(`${baseURL}/set_area?width_m=${w}&height_m=${h}&origin_x=${ox}&origin_y=${oy}&name=${encodeURIComponent(name)}`)
-      .catch(err => console.error("Area HTTP error:", err));
-  }
-  closeModal("areaModal");
-  showToast("Work area saved");
 }
 
 function updateAutoSpeed() {
