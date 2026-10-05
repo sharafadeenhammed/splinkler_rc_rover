@@ -465,16 +465,19 @@ function renderRoverMap(pose, area) {
       loadedAreaId = area.id;
     }
   }
-  let roverGeo = localToGeo(pose.x_m, pose.y_m);
-  if (lastGps && lastGps.fix && lastGps.lat != null) {
-    roverGeo = [lastGps.lat, lastGps.lon];
-  }
+  const roverGeo = localToGeo(pose.x_m, pose.y_m);
   roverMarker.setLatLng(roverGeo);
   roverMarker.setIcon(L.divIcon({ className: "rover-map-marker", html: `<span style="transform:rotate(${90 - (pose.heading_deg || 0)}deg)">▲</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }));
   trailPoints.push(roverGeo);
   if (trailPoints.length > 200) trailPoints.shift();
   trailLayer.setLatLngs(trailPoints);
-  if (poseText) poseText.innerText = `${pose.x_m.toFixed(1)}m, ${pose.y_m.toFixed(1)}m · ${pose.heading_deg.toFixed(0)}°`;
+  if (poseText) {
+    let label = `${pose.x_m.toFixed(1)}m, ${pose.y_m.toFixed(1)}m · ${pose.heading_deg.toFixed(0)}°`;
+    const fusion = pose.fusion;
+    if (fusion && fusion.gps_position) label += " · GPS fused";
+    else if (fusion && fusion.mode === "odometry") label += " · enc+IMU";
+    poseText.innerText = label;
+  }
 }
 
 function toggleMapDrawing() {

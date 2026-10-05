@@ -36,7 +36,10 @@ from helpers import (
     set_area_polygon,
     get_encoder_ticks, reset_encoders, encoder_config
 )
-from helpers.mpu6050 import get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading
+from helpers.mpu6050 import (
+    get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading, set_imu_heading_rad,
+)
+from helpers.pose_fusion import gps_heading_usable
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
 from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
@@ -62,6 +65,8 @@ current_run_id = None
 saved_area = DB.active_area()
 saved_map_origin = DB.map_origin()
 _map_origin_cache = {"value": saved_map_origin}
+if saved_map_origin:
+    pose_tracker.set_map_origin(saved_map_origin[0], saved_map_origin[1])
 if saved_area and len(saved_area.get("polygon", [])) >= 3:
     try:
         set_area_polygon(saved_area["polygon"])
@@ -88,7 +93,11 @@ def navigation_loop():
     try:
       imu = update_imu()
       left_ticks, right_ticks = get_encoder_ticks()
-      pose_tracker.update(left_ticks, right_ticks, imu)
+      pose_tracker.update(
+          left_ticks, right_ticks, imu,
+          gps=get_gps().get(),
+          map_origin=_map_origin_cache.get("value"),
+      )
       if not is_auto_active() and pose_tracker.run_id:
         DB.finish_run(pose_tracker.run_id, "stopped")
         pose_tracker.run_id = None
@@ -416,9 +425,21 @@ def apply_navigation_origin(latitude, longitude, source="manual"):
     if is_auto_active() or motor_status != "STOPPED":
         raise RuntimeError("Stop the rover before changing its map start")
     _map_origin_cache["value"] = DB.save_map_origin(latitude, longitude)
-    pose_tracker.reset(0.0, 0.0, 0.0)
-    reset_imu_heading()
-    return {"map_origin": [latitude, longitude], "source": source}
+    pose_tracker.set_map_origin(latitude, longitude)
+    heading_rad = 0.0
+    snap = get_gps().get()
+    if gps_heading_usable(snap):
+        heading_rad = math.radians(float(snap["course_deg"]))
+    elif source == "gps" and snap.get("fix"):
+        heading_rad = 0.0
+    pose_tracker.reset(0.0, 0.0, heading_rad)
+    set_imu_heading_rad(heading_rad)
+    return {
+        "map_origin": [latitude, longitude],
+        "source": source,
+        "heading_deg": math.degrees(heading_rad),
+        "gps": snap,
+    }
 
 
 def handle_set_auto_speed(speed_pct):

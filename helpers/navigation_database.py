@@ -8,6 +8,17 @@ import threading
 import time
 from contextlib import contextmanager
 
+from .pose_fusion import (
+    GPS_FUSION_ALPHA,
+    GPS_HEADING_BETA,
+    GPS_MAX_JUMP_M,
+    angle_lerp,
+    geo_to_local,
+    gps_fix_usable,
+    gps_heading_usable,
+    normalize_angle_rad,
+)
+
 
 DB_PATH = os.environ.get("ROVER_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "rover.db"))
 print(" ---- ---- ---- db path -- ", DB_PATH)
@@ -226,17 +237,70 @@ class PoseTracker:
         self.track = wheel_track_m
         self.ticks_per_rev = ticks_per_rev
         self.x = self.y = self.heading_rad = 0.0
+        self._x_odom = self._y_odom = 0.0
         self._last_ticks = None
         self._last_save = 0.0
         self.run_id = None
         self.lock = threading.RLock()
+        self.origin_lat = None
+        self.origin_lon = None
+        self._gps_position_active = False
+        self._gps_heading_active = False
+        self._fusion_note = "odometry"
+
+    def set_map_origin(self, latitude, longitude):
+        with self.lock:
+            self.origin_lat = float(latitude)
+            self.origin_lon = float(longitude)
+
+    def clear_map_origin(self):
+        with self.lock:
+            self.origin_lat = self.origin_lon = None
+            self._gps_position_active = False
+            self._gps_heading_active = False
+            self._fusion_note = "odometry"
 
     def reset(self, x=0.0, y=0.0, heading_rad=0.0):
         with self.lock:
-            self.x, self.y, self.heading_rad = float(x), float(y), float(heading_rad)
+            self.x = self._x_odom = float(x)
+            self.y = self._y_odom = float(y)
+            self.heading_rad = normalize_angle_rad(float(heading_rad))
             self._last_ticks = None
+            self._gps_position_active = False
+            self._gps_heading_active = False
+            self._fusion_note = "origin_reset"
 
-    def update(self, left_ticks, right_ticks, imu=None):
+    def _apply_gps_fusion(self, gps):
+        if not gps_fix_usable(gps):
+            self._gps_position_active = False
+            return
+        if self.origin_lat is None or self.origin_lon is None:
+            self._gps_position_active = False
+            return
+
+        x_gps, y_gps = geo_to_local(
+            float(gps["lat"]), float(gps["lon"]), self.origin_lat, self.origin_lon,
+        )
+        jump = math.hypot(x_gps - self.x, y_gps - self.y)
+        if self._gps_position_active and jump > GPS_MAX_JUMP_M:
+            self._fusion_note = "gps_spike_rejected"
+            return
+
+        alpha = GPS_FUSION_ALPHA
+        self.x = (1.0 - alpha) * self.x + alpha * x_gps
+        self.y = (1.0 - alpha) * self.y + alpha * y_gps
+        self._gps_position_active = True
+        self._fusion_note = "gps_encoders_imu"
+
+        if gps_heading_usable(gps):
+            course_rad = math.radians(float(gps["course_deg"]))
+            self.heading_rad = angle_lerp(self.heading_rad, course_rad, GPS_HEADING_BETA)
+            self._gps_heading_active = True
+
+    def update(self, left_ticks, right_ticks, imu=None, gps=None, map_origin=None):
+        if map_origin and len(map_origin) == 2:
+            self.set_map_origin(map_origin[0], map_origin[1])
+
         with self.lock:
             if self._last_ticks is not None:
                 dl = (left_ticks - self._last_ticks[0]) * self.circumference / self.ticks_per_rev
@@ -244,26 +308,45 @@ class PoseTracker:
                 distance = (dl + dr) / 2.0
                 encoder_heading = self.heading_rad + (dr - dl) / self.track
                 if imu and imu.get("available"):
-                    # IMU heading is relative to its reset; use it for yaw while
-                    # encoders provide distance and position integration.
-                    self.heading_rad = math.radians(imu["heading_deg"])
+                    # MPU6050 yaw (magnetometer can replace GPS course blend later).
+                    self.heading_rad = normalize_angle_rad(math.radians(imu["heading_deg"]))
                 else:
-                    self.heading_rad = encoder_heading
-                mid_heading = (self.heading_rad + encoder_heading) / 2.0
-                self.x += distance * math.cos(mid_heading)
-                self.y += distance * math.sin(mid_heading)
+                    self.heading_rad = normalize_angle_rad(encoder_heading)
+                mid_heading = normalize_angle_rad((self.heading_rad + encoder_heading) / 2.0)
+                self._x_odom += distance * math.cos(mid_heading)
+                self._y_odom += distance * math.sin(mid_heading)
+                self.x = self._x_odom
+                self.y = self._y_odom
+                self._fusion_note = "odometry"
+
             self._last_ticks = (left_ticks, right_ticks)
-            pose = self.snapshot()
+            if gps:
+                self._apply_gps_fusion(gps)
+            pose = self._snapshot_locked()
+
         now = time.monotonic()
-        # Position is updated at 20 Hz, but one durable sample per second is
-        # enough for route history and keeps SQLite I/O small on a 512 MB Pi.
         if self.run_id and now - self._last_save >= 1.0:
             self.db.record_telemetry(self.run_id, pose, imu or {}, left_ticks, right_ticks)
             self._last_save = now
         return pose
 
+    def _snapshot_locked(self):
+        return {
+            "x_m": self.x,
+            "y_m": self.y,
+            "heading_deg": math.degrees(self.heading_rad),
+            "fusion": {
+                "mode": self._fusion_note,
+                "gps_position": self._gps_position_active,
+                "gps_heading": self._gps_heading_active,
+                "x_odom_m": self._x_odom,
+                "y_odom_m": self._y_odom,
+            },
+        }
+
     def snapshot(self):
-        return {"x_m": self.x, "y_m": self.y, "heading_deg": math.degrees(self.heading_rad)}
+        with self.lock:
+            return self._snapshot_locked()
 
 
 DB = NavigationDatabase()

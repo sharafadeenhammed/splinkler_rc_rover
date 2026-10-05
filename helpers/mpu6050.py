@@ -121,4 +121,18 @@ def reset_imu_heading():
     MPU.reset_heading()
 
 
-__all__ = ["MPU", "get_imu_snapshot", "update_imu", "calibrate_imu", "reset_imu_heading"]
+def set_imu_heading_rad(heading_rad):
+    """Align integrated gyro heading with an external reference (e.g. GPS course)."""
+    with MPU._lock:
+        MPU.heading_rad = (float(heading_rad) + math.pi) % (2 * math.pi) - math.pi
+        MPU.last_update = time.monotonic()
+
+
+__all__ = [
+    "MPU",
+    "get_imu_snapshot",
+    "update_imu",
+    "calibrate_imu",
+    "reset_imu_heading",
+    "set_imu_heading_rad",
+]

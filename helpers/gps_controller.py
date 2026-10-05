@@ -31,6 +31,7 @@ class _GPSUnavailable:
             "lon": None,
             "sats": 0,
             "speed_kmh": None,
+            "course_deg": None,
             "error": "GPS not available",
         }
 
@@ -46,6 +47,7 @@ class GPS:
         self.speed_kmh = None
         self.sats = 0
         self.fix = False
+        self.course_deg = None
         self._run = False
         self._t = None
         self.error = None
@@ -79,6 +81,8 @@ class GPS:
                         self.lat, self.lon = msg.latitude, msg.longitude
                 elif isinstance(msg, pynmea2.types.talker.RMC) and msg.status == "A":
                     self.speed_kmh = (msg.spd_over_grnd or 0) * 1.852
+                    if msg.true_course is not None:
+                        self.course_deg = float(msg.true_course)
             except (pynmea2.ParseError, serial.SerialException, ValueError, AttributeError):
                 continue
 
@@ -90,6 +94,7 @@ class GPS:
             "lon": self.lon,
             "sats": self.sats,
             "speed_kmh": self.speed_kmh,
+            "course_deg": self.course_deg,
             "error": self.error,
         }
 
