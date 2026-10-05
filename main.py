@@ -1,3 +1,4 @@
+import os
 import sys
 import signal
 import time
@@ -5,6 +6,12 @@ import threading
 import subprocess
 import json
 from flask import Flask, Response, render_template, request, jsonify
+
+# Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
+try:
+    os.nice(10)
+except (OSError, AttributeError):
+    pass
 
 try:
     from flask_sock import Sock
@@ -48,6 +55,17 @@ connected_clients = set()
 pose_tracker = PoseTracker(DB, WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
 current_run_id = None
 
+# Cache for the active work area so telemetry doesn't hit the database every build.
+_area_cache = {"value": None, "ts": 0.0}
+
+
+def cached_active_area():
+    now = time.time()
+    if now - _area_cache["ts"] > 5.0:
+        _area_cache["value"] = DB.active_area()
+        _area_cache["ts"] = now
+    return _area_cache["value"]
+
 
 def navigation_loop():
   """Update local pose and persist navigation telemetry at 20 Hz."""
@@ -87,16 +105,18 @@ def read_sensor_loop():
       time.sleep(2.0)
 
 def generate_frames():
-    # Use rpicam-vid with the mjpeg codec for clean streaming frame outputs
+    # Use rpicam-vid with the mjpeg codec for clean streaming frame outputs.
+    # Kept small (320x240 @ 10 fps, quality 50) so the Zero W's CPU and 2.4 GHz Wi-Fi can cope.
     cmd = [
         'rpicam-vid',
         '-t', '0',               # Run indefinitely
         '--codec', 'mjpeg',     # Force MJPEG frame outputs
+        '--quality', '50',      # Smaller frames
         '--inline',             # Include frame headers inline
         '-o', '-',              # Output directly to stdout pipe
-        '--width', '640',       # Balanced resolution
-        '--height', '480',
-        '--framerate', '15',    # Cap at 15 FPS for smooth network throughput
+        '--width', '320',
+        '--height', '240',
+        '--framerate', '10',
         '-n'                    # Suppress local desktop preview window
     ]
     
@@ -104,9 +124,10 @@ def generate_frames():
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     buffer = b""
+    last_vision = 0.0   # throttle vision analysis (2 frames/sec instead of every frame)
     try:
         while True:
-            chunk = process.stdout.read(4096)
+            chunk = process.stdout.read1(32768)
             if not chunk:
                 # If the process terminates, check stderr logs
                 stderr_data = process.stderr.read()
@@ -125,8 +146,11 @@ def generate_frames():
                     jpg = buffer[start:end+2]
                     buffer = buffer[end+2:]
                     
-                    # Feed frame to camera vision analyzer
-                    set_latest_frame(jpg)
+                    # Feed frame to camera vision analyzer (throttled)
+                    now = time.time()
+                    if now - last_vision >= 0.5:
+                        set_latest_frame(jpg)
+                        last_vision = now
 
                     # Yield standard multipart frame payload
                     yield (b'--frame\r\n'
@@ -297,7 +321,7 @@ def get_telemetry_payload():
     payload["encoder_config"] = encoder_config()
     payload["imu"] = get_imu_snapshot()
     payload["pose"] = pose_tracker.snapshot()
-    payload["active_area"] = DB.active_area()
+    payload["active_area"] = cached_active_area()
     payload["success"] = True
     return payload
 
@@ -319,6 +343,7 @@ def handle_set_area(width_m, height_m, origin_x=0, origin_y=0, name="Work area")
         origin_x, origin_y = float(origin_x), float(origin_y)
         set_area(width_m, height_m)
         area = DB.save_area(name, origin_x, origin_y, origin_x + width_m, origin_y + height_m)
+        _area_cache["ts"] = 0.0  # force the cached active area to refresh
         if not is_auto_active():
             pose_tracker.reset(origin_x, origin_y, 0.0)
         return {"success": True, "area_width_m": width_m, "area_height_m": height_m, "area": area}
@@ -375,7 +400,7 @@ def ws_telemetry_broadcast_loop():
     print("🛰️ WS Telemetry broadcast thread started.")
     while True:
         try:
-            time.sleep(0.5)
+            time.sleep(1.0)
             with clients_lock:
                 if not connected_clients:
                     continue
@@ -636,4 +661,5 @@ def navigation_runs():
 if __name__ == '__main__':
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
     # threaded=True allows multiple backend connections without blocking
-    app.run(host='0.0.0.0', port=5000, threaded=True, debug=True, use_reloader=False)
+    # debug=False: debug mode adds overhead and exposes the Werkzeug debugger to the network
+    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False, use_reloader=False)
