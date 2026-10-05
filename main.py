@@ -5,6 +5,7 @@ import time
 import threading
 import subprocess
 import json
+import select
 from flask import Flask, Response, render_template, request, jsonify
 
 # Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
@@ -112,64 +113,131 @@ def read_sensor_loop():
       # Sensor chips (like DHT22 or BME280) should not be polled faster than 1-2 seconds.
       time.sleep(2.0)
 
-def generate_frames():
-    # Use rpicam-vid with the mjpeg codec for clean streaming frame outputs.
-    # Kept small (320x240 @ 10 fps, quality 50) so the Zero W's CPU and 2.4 GHz Wi-Fi can cope.
-    cmd = [
-        'rpicam-vid',
-        '-t', '0',               # Run indefinitely
-        '--codec', 'mjpeg',     # Force MJPEG frame outputs
-        '--quality', '50',      # Smaller frames
-        '--inline',             # Include frame headers inline
-        '-o', '-',              # Output directly to stdout pipe
-        '--width', '320',
-        '--height', '240',
-        '--framerate', '10',
-        '-n'                    # Suppress local desktop preview window
-    ]
-    
-    # Spawn the process and capture stdout
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    
-    buffer = b""
-    last_vision = 0.0   # throttle vision analysis (2 frames/sec instead of every frame)
-    try:
-        while True:
-            chunk = process.stdout.read1(32768)
-            if not chunk:
-                break
-                
-            buffer += chunk
-            # Bound an incomplete/malformed camera stream so it cannot consume
-            # the Pi's memory indefinitely.
-            if len(buffer) > 512 * 1024:
-                buffer = buffer[-128 * 1024:]
-            
-            # Extract distinct JPEG frames out of the stream buffer
-            while b'\xff\xd8' in buffer:
-                start = buffer.find(b'\xff\xd8')
-                end = buffer.find(b'\xff\xd9', start)
-                
-                if end != -1:
-                    jpg = buffer[start:end+2]
-                    buffer = buffer[end+2:]
-                    
-                    # Feed frame to camera vision analyzer (throttled)
-                    now = time.time()
-                    if now - last_vision >= 0.5:
-                        set_latest_frame(jpg)
-                        last_vision = now
+class SharedCameraStream:
+    """One low-bitrate camera process shared by the dashboard stream."""
 
-                    # Yield standard multipart frame payload
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + jpg + b'\r\n')
-                else:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.condition = threading.Condition(self.lock)
+        self.process = None
+        self.clients = 0
+        self.sequence = 0
+        self.frame = None  # Keep only the latest JPEG in RAM.
+        self.last_client_at = time.monotonic()
+
+    def subscribe(self):
+        with self.lock:
+            if self.clients >= 1:
+                return False
+            self.clients = 1
+            self.last_client_at = time.monotonic()
+            if self.process is None or self.process.poll() is not None:
+                self._start_locked()
+            return True
+
+    def unsubscribe(self):
+        with self.condition:
+            self.clients = 0
+            self.last_client_at = time.monotonic()
+            self.condition.notify_all()
+
+    def _start_locked(self):
+        command = [
+            "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "25",
+            "--inline", "-o", "-", "--width", "160", "--height", "120",
+            "--framerate", "4", "-n",
+        ]
+        try:
+            self.process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
+            )
+        except (FileNotFoundError, OSError) as exc:
+            self.process = None
+            print(f"Camera unavailable: {exc}")
+            return
+        threading.Thread(target=self._reader, args=(self.process,), daemon=True).start()
+
+    def _reader(self, process):
+        buffer = bytearray()
+        last_vision = 0.0
+        try:
+            while process.poll() is None:
+                with self.lock:
+                    idle = self.clients == 0 and time.monotonic() - self.last_client_at > 5.0
+                if idle:
                     break
-    except GeneratorExit:
-        print("Client disconnected from web/mobile stream.")
-    finally:
-        process.terminate()
-        process.wait()
+                ready, _, _ = select.select([process.stdout], [], [], 0.5)
+                if not ready:
+                    continue
+                chunk = os.read(process.stdout.fileno(), 8192)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                if len(buffer) > 128 * 1024:
+                    del buffer[:-8192]
+                while True:
+                    start = buffer.find(b"\xff\xd8")
+                    if start < 0:
+                        buffer.clear()
+                        break
+                    end = buffer.find(b"\xff\xd9", start + 2)
+                    if end < 0:
+                        if start:
+                            del buffer[:start]
+                        break
+                    frame = bytes(buffer[start:end + 2])
+                    del buffer[:end + 2]
+                    with self.condition:
+                        self.frame = frame
+                        self.sequence += 1
+                        self.condition.notify_all()
+                    now = time.monotonic()
+                    if now - last_vision >= 1.0:
+                        set_latest_frame(frame)
+                        last_vision = now
+        except (OSError, ValueError) as exc:
+            print(f"Camera stream ended: {exc}")
+        finally:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=2)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+            with self.condition:
+                if self.process is process:
+                    self.process = None
+                    self.frame = None
+                    self.sequence += 1
+                self.condition.notify_all()
+
+    def frames(self):
+        if not self.subscribe():
+            return
+        last_sequence = -1
+        try:
+            while True:
+                with self.condition:
+                    self.condition.wait_for(
+                        lambda: self.sequence != last_sequence or self.clients == 0,
+                        timeout=2.0,
+                    )
+                    if self.clients == 0:
+                        break
+                    frame = self.frame
+                    sequence = self.sequence
+                if frame is not None and sequence != last_sequence:
+                    last_sequence = sequence
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+                           str(len(frame)).encode("ascii") + b"\r\n\r\n" + frame + b"\r\n")
+        finally:
+            self.unsubscribe()
+
+
+camera_stream = SharedCameraStream()
 
 class WSClientWrapper:
     def __init__(self, ws):
@@ -552,9 +620,13 @@ if HAS_SOCK:
 
 @app.route('/stream')
 def video_stream():
+    with camera_stream.lock:
+        if camera_stream.clients >= 1:
+            return Response("Camera stream already in use", status=429, headers={"Retry-After": "3"})
     return Response(
-        generate_frames(),
-        mimetype='multipart/x-mixed-replace; boundary=--frame'
+        camera_stream.frames(),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Accel-Buffering": "no"},
     )
 
 @app.route("/")

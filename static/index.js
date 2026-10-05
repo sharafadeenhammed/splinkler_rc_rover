@@ -57,6 +57,7 @@ let heartbeatInterval = null;
 let httpPollInterval = null;
 let videoRetryTimer = null;
 let reconnectAttempts = 0;
+let videoRetryAttempts = 0;
 const MAX_RECONNECT_DELAY_MS = 5000;
 
 // Initialize video feed source
@@ -67,14 +68,19 @@ if (videoFeed) {
 // ----------------- Video Feed Reconnection -----------------
 
 function handleVideoError() {
-  console.warn("📹 Video stream dropped. Retrying in 3 seconds...");
+  console.warn("📹 Video stream dropped. Retrying with backoff...");
   clearTimeout(videoRetryTimer);
+  const delay = Math.min(3000 * (2 ** videoRetryAttempts), 30000);
+  videoRetryAttempts = Math.min(videoRetryAttempts + 1, 4);
   videoRetryTimer = setTimeout(() => {
     if (videoFeed) {
-      // Add cache buster to force reload
-      videoFeed.src = `${baseURL}/stream?t=${new Date().getTime()}`;
+      videoFeed.src = `${baseURL}/stream`;
     }
-  }, 3000);
+  }, delay);
+}
+
+if (videoFeed) {
+  videoFeed.addEventListener("load", () => { videoRetryAttempts = 0; });
 }
 
 // ----------------- Connection Badge & State -----------------
@@ -705,6 +711,7 @@ window.addEventListener("blur", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  clearTimeout(videoRetryTimer);
   if (activeDirection) {
     sendHardwareCommand(0, "stop");
   }
