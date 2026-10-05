@@ -32,8 +32,8 @@ print("running test...")
 #     time.sleep(0.3)
 
 import time
-from helpers.gps_controller import gps
+from helpers.gps_controller import get_gps
 while True:
-    print(gps.get()); time.sleep(1)
+    print(get_gps().get()); time.sleep(1)
 
 # pause()

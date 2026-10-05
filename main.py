@@ -37,6 +37,7 @@ from helpers import (
     get_encoder_ticks, reset_encoders, encoder_config
 )
 from helpers.mpu6050 import get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading
+from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
 from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
 
@@ -402,8 +403,22 @@ def get_telemetry_payload():
     payload["pose"] = pose_tracker.snapshot()
     payload["active_area"] = cached_active_area()
     payload["map_origin"] = _map_origin_cache["value"]
+    payload["gps"] = get_gps().get()
     payload["success"] = True
     return payload
+
+
+def apply_navigation_origin(latitude, longitude, source="manual"):
+    """Reset local pose so this lat/lon becomes map centre (0, 0 m)."""
+    global _map_origin_cache
+    if not (-85.0 <= latitude <= 85.0 and -180.0 <= longitude <= 180.0):
+        raise ValueError("Map origin is outside supported coordinates")
+    if is_auto_active() or motor_status != "STOPPED":
+        raise RuntimeError("Stop the rover before changing its map start")
+    _map_origin_cache["value"] = DB.save_map_origin(latitude, longitude)
+    pose_tracker.reset(0.0, 0.0, 0.0)
+    reset_imu_heading()
+    return {"map_origin": [latitude, longitude], "source": source}
 
 
 def handle_set_auto_speed(speed_pct):
@@ -715,19 +730,35 @@ def save_polygon_work_area():
 
 @app.route('/api/navigation/origin', methods=['POST'])
 def set_navigation_origin():
-    if is_auto_active() or motor_status != "STOPPED":
-        return jsonify({"success": False, "error": "Stop the rover before changing its map start"}), 409
     payload = request.get_json(silent=True) or {}
     try:
         latitude = float(payload["latitude"])
         longitude = float(payload["longitude"])
-        if not (-85.0 <= latitude <= 85.0 and -180.0 <= longitude <= 180.0):
-            raise ValueError("Map centre is outside supported coordinates")
-        _map_origin_cache["value"] = DB.save_map_origin(latitude, longitude)
-        pose_tracker.reset(0.0, 0.0, 0.0)
-        reset_imu_heading()
-        return jsonify({"success": True, "map_origin": [latitude, longitude]}), 200
+        result = apply_navigation_origin(latitude, longitude, source=payload.get("source", "manual"))
+        return jsonify({"success": True, **result}), 200
+    except RuntimeError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
     except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+
+@app.route('/api/navigation/origin/gps', methods=['POST'])
+def set_navigation_origin_from_gps():
+    snap = get_gps().get()
+    if not snap.get("available"):
+        return jsonify({"success": False, "error": snap.get("error") or "GPS module not available"}), 503
+    if not snap.get("fix"):
+        return jsonify({
+            "success": False,
+            "error": "No GPS fix yet — move outdoors or wait for satellites",
+            "gps": snap,
+        }), 409
+    try:
+        result = apply_navigation_origin(float(snap["lat"]), float(snap["lon"]), source="gps")
+        return jsonify({"success": True, "gps": snap, **result}), 200
+    except RuntimeError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+    except (TypeError, ValueError) as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
 
 

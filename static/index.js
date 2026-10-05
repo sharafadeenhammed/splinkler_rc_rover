@@ -32,6 +32,7 @@ const areaNameInput = document.getElementById("areaNameInput");
 const roverMap = document.getElementById("roverMap");
 const poseText = document.getElementById("poseText");
 const mapCoordinateText = document.getElementById("mapCoordinateText");
+const gpsText = document.getElementById("gpsText");
 const videoFeed = document.getElementById("videoFeed");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
@@ -55,6 +56,9 @@ let draftLayer = null;
 let trailLayer = null;
 let loadedAreaId = null;
 let loadedOrigin = false;
+let lastGps = null;
+let originSetForWork = false;
+let mapViewBootstrapped = false;
 const trailPoints = [];
 const EARTH_RADIUS_M = 6378137;
 
@@ -92,7 +96,15 @@ if (roverMap && window.L) {
   leafletMap.on("mousemove", (event) => {
     if (mapCoordinateText) mapCoordinateText.innerText = `${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
   });
-  setTimeout(() => leafletMap.invalidateSize(), 100);
+  window.addEventListener("resize", () => {
+    if (leafletMap) leafletMap.invalidateSize();
+  });
+  const reflowMap = () => { if (leafletMap) leafletMap.invalidateSize(); };
+  setTimeout(reflowMap, 100);
+  setTimeout(reflowMap, 500);
+  if (window.ResizeObserver && roverMap) {
+    new ResizeObserver(reflowMap).observe(roverMap);
+  }
 }
 
 // ----------------- Video Feed Reconnection -----------------
@@ -183,6 +195,9 @@ function initWebSocket() {
         if (msg.telemetry) {
           renderTelemetry(msg.telemetry);
         }
+        notifyFromResponse(msg);
+      } else if (msg.type === "error" && msg.message) {
+        showToast(msg.message);
       }
     } catch (err) {
       console.warn("[WS] Error parsing incoming message:", err, event.data);
@@ -297,12 +312,121 @@ function renderTelemetry(data) {
   if (data.auto_progress) {
     updateAutoProgressUI(data.auto_progress);
   }
+  if (data.gps) updateGpsReadout(data.gps);
   if (data.pose) renderRoverMap(data.pose, data.active_area);
-  if (!data.active_area && Array.isArray(data.map_origin) && !loadedOrigin && leafletMap) {
-    mapOrigin = data.map_origin;
-    leafletMap.setView(mapOrigin, 18);
-    roverMarker.setLatLng(mapOrigin);
-    loadedOrigin = true;
+  if (leafletMap && !mapViewBootstrapped) {
+    if (data.gps && data.gps.fix && data.gps.lat != null) {
+      leafletMap.setView([data.gps.lat, data.gps.lon], 18);
+      mapViewBootstrapped = true;
+    } else if (Array.isArray(data.map_origin)) {
+      mapOrigin = data.map_origin;
+      leafletMap.setView(mapOrigin, 18);
+      roverMarker.setLatLng(mapOrigin);
+      loadedOrigin = true;
+      originSetForWork = true;
+      mapViewBootstrapped = true;
+    }
+  }
+}
+
+function updateGpsReadout(gps) {
+  lastGps = gps || null;
+  if (!gpsText) return;
+  if (!gps || !gps.available) {
+    gpsText.innerText = gps && gps.error ? `GPS off · ${gps.error}` : "GPS unavailable";
+    gpsText.classList.remove("fix");
+    return;
+  }
+  if (gps.fix && gps.lat != null) {
+    gpsText.innerText = `GPS fix · ${gps.sats} sats · ${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`;
+    gpsText.classList.add("fix");
+  } else {
+    gpsText.innerText = `GPS search · ${gps.sats || 0} sats`;
+    gpsText.classList.remove("fix");
+  }
+}
+
+function getRoverGeoPosition() {
+  if (lastGps && lastGps.fix && lastGps.lat != null) {
+    return [lastGps.lat, lastGps.lon];
+  }
+  if (roverMarker) {
+    const ll = roverMarker.getLatLng();
+    return [ll.lat, ll.lng];
+  }
+  if (lastPose) {
+    return localToGeo(lastPose.x_m, lastPose.y_m);
+  }
+  return null;
+}
+
+function applyOriginAtRover(sourceLabel) {
+  const selectedOrigin = getRoverGeoPosition();
+  if (!selectedOrigin) {
+    showToast("No rover position yet — wait for GPS or encoder data");
+    return Promise.reject(new Error("no position"));
+  }
+  const previousOrigin = mapOrigin.slice();
+  mapOrigin = selectedOrigin.slice();
+  if (leafletMap) {
+    leafletMap.setView(selectedOrigin, Math.max(leafletMap.getZoom(), 18));
+  }
+  if (mapCoordinateText) {
+    mapCoordinateText.innerText = `${selectedOrigin[0].toFixed(5)}, ${selectedOrigin[1].toFixed(5)}`;
+  }
+  const body = {
+    latitude: selectedOrigin[0],
+    longitude: selectedOrigin[1],
+    source: lastGps && lastGps.fix ? "gps" : "rover",
+  };
+  return fetch(`${baseURL}/api/navigation/origin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+    .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) throw new Error(data.error || "Could not set work origin");
+      trailPoints.length = 0;
+      if (trailLayer) trailLayer.setLatLngs([]);
+      loadedOrigin = true;
+      originSetForWork = true;
+      lastPose = { x_m: 0, y_m: 0, heading_deg: lastPose ? lastPose.heading_deg : 0 };
+      roverMarker.setLatLng(selectedOrigin);
+      if (poseText) {
+        poseText.innerText = `0.0m, 0.0m · ${(lastPose.heading_deg || 0).toFixed(0)}°`;
+      }
+      showToast(sourceLabel || "Map centred on rover — origin set to 0, 0 m");
+    })
+    .catch((error) => {
+      mapOrigin = previousOrigin;
+      showToast(error.message || "Could not set origin");
+      throw error;
+    });
+}
+
+function notifyFromResponse(msg) {
+  if (!msg || msg.type !== "response") return;
+  if (msg.success === false) {
+    showToast(msg.message || msg.error || "Command failed");
+    return;
+  }
+  const cmd = msg.command;
+  if (cmd === "ping" || cmd === "get_status") return;
+  if (cmd === "motor" && msg.status) {
+    if (/STOPPED/i.test(msg.status)) showToast("Motors stopped");
+    return;
+  }
+  if (cmd === "pump") {
+    showToast(msg.pump_active ? "Water pump on" : "Water pump off");
+  } else if (cmd === "sensor_deploy") {
+    showToast(msg.is_deployed ? "Probe deployed" : "Probe retracted");
+  } else if (cmd === "auto_mode") {
+    showToast(msg.auto_active ? "Autonomous mode started" : "Autonomous mode stopped");
+  } else if (cmd === "auto_speed" && msg.auto_speed_pct != null) {
+    showToast(`Auto speed set to ${msg.auto_speed_pct}%`);
+  } else if (cmd === "camera_tilt" && msg.current_angle != null) {
+    showToast(`Camera pan ${msg.current_angle}°`);
   }
 }
 
@@ -329,6 +453,7 @@ function renderRoverMap(pose, area) {
       if (Number.isFinite(area.origin_lat) && Number.isFinite(area.origin_lon)) {
         mapOrigin = [area.origin_lat, area.origin_lon];
         loadedOrigin = true;
+        originSetForWork = true;
       }
       const areaPoints = Array.isArray(area.map_polygon) ? area.map_polygon : [];
       workAreaLayer.setLatLngs(areaPoints);
@@ -340,7 +465,10 @@ function renderRoverMap(pose, area) {
       loadedAreaId = area.id;
     }
   }
-  const roverGeo = localToGeo(pose.x_m, pose.y_m);
+  let roverGeo = localToGeo(pose.x_m, pose.y_m);
+  if (lastGps && lastGps.fix && lastGps.lat != null) {
+    roverGeo = [lastGps.lat, lastGps.lon];
+  }
   roverMarker.setLatLng(roverGeo);
   roverMarker.setIcon(L.divIcon({ className: "rover-map-marker", html: `<span style="transform:rotate(${90 - (pose.heading_deg || 0)}deg)">▲</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }));
   trailPoints.push(roverGeo);
@@ -353,8 +481,20 @@ function toggleMapDrawing() {
   mapDrawing = !mapDrawing;
   const button = document.getElementById("drawAreaBtn");
   const hint = document.getElementById("drawHint");
+  if (mapDrawing) {
+    centerMapOnRover();
+    if (!originSetForWork && !loadedOrigin) {
+      showToast("Set origin at rover first, then draw the boundary");
+    } else {
+      showToast("Tap map corners — drag to pan when not placing points");
+    }
+  }
   if (button) button.classList.toggle("active", mapDrawing);
-  if (hint) hint.innerText = mapDrawing ? "Tap/click boundary points · drag map to pan" : "Pan and zoom, then set rover start";
+  if (hint) {
+    hint.innerText = mapDrawing
+      ? "Tap boundary points · pan with drag"
+      : "Origin at rover centres the map · then draw boundary";
+  }
   if (leafletMap) leafletMap.getContainer().classList.toggle("drawing", mapDrawing);
 }
 
@@ -365,39 +505,35 @@ function updateDrawHint() {
 }
 
 function undoPolygonPoint() {
+  if (!polygonDraft.length) {
+    showToast("Nothing to undo");
+    return;
+  }
   polygonDraft.pop();
   updateDrawHint();
+  showToast("Removed last boundary point");
 }
 
 function clearPolygon() {
   polygonDraft = [];
   updateDrawHint();
+  showToast("Boundary draft cleared");
 }
 
 function setRoverStart() {
   if (!leafletMap) return;
-  const previousOrigin = mapOrigin;
-  const selectedOrigin = [leafletMap.getCenter().lat, leafletMap.getCenter().lng];
-  mapOrigin = selectedOrigin;
-  if (mapCoordinateText) mapCoordinateText.innerText = `${selectedOrigin[0].toFixed(5)}, ${selectedOrigin[1].toFixed(5)}`;
-  fetch(`${baseURL}/api/navigation/origin`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ latitude: selectedOrigin[0], longitude: selectedOrigin[1] }),
-  }).then((response) => response.json().then((data) => ({ ok: response.ok, data })))
-    .then(({ ok, data }) => {
-      if (!ok) throw new Error(data.error || "Could not set rover start");
-      trailPoints.length = 0;
-      loadedOrigin = true;
-      roverMarker.setLatLng(selectedOrigin);
-      showToast("Rover start set at map centre");
-    }).catch((error) => {
-      mapOrigin = previousOrigin;
-      showToast(error.message);
-    });
+  applyOriginAtRover("Work map centred on rover — local position reset to 0, 0 m");
 }
 
 function centerMapOnRover() {
-  if (leafletMap && roverMarker) leafletMap.setView(roverMarker.getLatLng(), Math.max(leafletMap.getZoom(), 18));
+  if (!leafletMap) return;
+  const pos = getRoverGeoPosition();
+  if (!pos) {
+    showToast("Rover position not available yet");
+    return;
+  }
+  leafletMap.setView(pos, Math.max(leafletMap.getZoom(), 18));
+  showToast("Map centred on rover");
 }
 
 function savePolygonArea() {
@@ -405,6 +541,11 @@ function savePolygonArea() {
     showToast("Add at least three boundary points");
     return;
   }
+  if (!originSetForWork) {
+    showToast("Tap “Origin here” at the rover before saving");
+    return;
+  }
+  showToast("Saving work area…");
   const name = (areaNameInput && areaNameInput.value) || "Map work area";
   const localPoints = polygonDraft.map((point) => geoToLocal(point));
   fetch(`${baseURL}/api/areas/polygon`, {
@@ -423,7 +564,7 @@ function savePolygonArea() {
       workAreaLayer.setLatLngs(data.area.map_polygon || []);
       draftLayer.setLatLngs([]);
       if (lastPose) renderRoverMap(lastPose, data.area);
-      showToast("Multi-coordinate work area saved");
+      showToast(`Work area “${data.area.name || name}” saved`);
     })
     .catch((error) => showToast(error.message));
 }
@@ -509,9 +650,12 @@ function toggleSensorDeploy(action = "toggle") {
     fetch(`${baseURL}/deploy_sensor?action=${action}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.success) updateSensorUI(data.is_deployed);
+        if (data.success) {
+          updateSensorUI(data.is_deployed);
+          showToast(data.is_deployed ? "Probe deployed" : "Probe retracted");
+        } else showToast(data.error || "Probe command failed");
       })
-      .catch((err) => console.error("Sensor deploy HTTP error:", err));
+      .catch(() => showToast("Could not reach rover (probe)"));
   }
 }
 
@@ -521,9 +665,12 @@ function toggleWaterPump(action = "toggle") {
     fetch(`${baseURL}/water_pump?action=${action}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.success) updatePumpUI(data.pump_active);
+        if (data.success) {
+          updatePumpUI(data.pump_active);
+          showToast(data.pump_active ? "Water pump on" : "Water pump off");
+        } else showToast(data.error || "Pump command failed");
       })
-      .catch((err) => console.error("Water pump HTTP error:", err));
+      .catch(() => showToast("Could not reach rover (pump)"));
   }
 }
 
@@ -533,9 +680,12 @@ function toggleAutoMode(action = "toggle") {
     fetch(`${baseURL}/auto_mode?action=${action}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.success) updateAutoUI(data.auto_active);
+        if (data.success) {
+          updateAutoUI(data.auto_active);
+          showToast(data.auto_active ? "Autonomous mode started" : "Autonomous mode stopped");
+        } else showToast(data.error || "Auto mode failed");
       })
-      .catch((err) => console.error("Auto mode HTTP error:", err));
+      .catch(() => showToast("Could not reach rover (auto mode)"));
   }
 }
 
@@ -549,18 +699,25 @@ function tiltCamera(direction) {
         if (angleElem && data.current_angle !== undefined) {
           angleElem.innerText = data.current_angle;
         }
+        if (data.success) showToast(`Camera pan ${data.current_angle}°`);
+        else showToast(data.error || "Camera tilt failed");
       })
-      .catch((err) => console.error("Camera tilt HTTP error:", err));
+      .catch(() => showToast("Could not reach rover (camera)"));
   }
 }
 
 function updateAutoSpeed() {
-  const speed = parseInt(autoSpeedSlider.value);
+  const speed = parseInt(autoSpeedSlider.value, 10);
   if (autoSpeedVal) autoSpeedVal.innerText = speed;
   const sent = sendWSCommand({ type: "auto_speed", speed_pct: speed });
   if (!sent) {
     fetch(`${baseURL}/auto_speed?speed_pct=${speed}`)
-      .catch(err => console.error("Auto speed HTTP error:", err));
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) showToast(`Auto speed set to ${speed}%`);
+        else showToast(data.error || "Could not set auto speed");
+      })
+      .catch(() => showToast("Could not reach rover (auto speed)"));
   }
 }
 
@@ -580,6 +737,7 @@ if (slider) {
 function toggleSidebar(open) {
   if (sidebar) sidebar.classList.toggle("open", open);
   if (mobileBackdrop) mobileBackdrop.classList.toggle("open", open);
+  if (open && leafletMap) setTimeout(() => leafletMap.invalidateSize(), 280);
 }
 
 function openModal(id) {
