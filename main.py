@@ -6,6 +6,7 @@ import threading
 import subprocess
 import json
 import select
+import math
 from flask import Flask, Response, render_template, request, jsonify
 
 # Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
@@ -31,7 +32,7 @@ from helpers import (
     get_distance_cm, set_latest_frame, get_vision_status,
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
-    get_auto_progress, set_auto_speed, set_area,
+    get_auto_progress, set_auto_speed,
     set_area_polygon,
     get_encoder_ticks, reset_encoders, encoder_config
 )
@@ -58,6 +59,8 @@ MAX_WS_CLIENTS = 2
 pose_tracker = PoseTracker(DB, WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
 current_run_id = None
 saved_area = DB.active_area()
+saved_map_origin = DB.map_origin()
+_map_origin_cache = {"value": saved_map_origin}
 if saved_area and len(saved_area.get("polygon", [])) >= 3:
     try:
         set_area_polygon(saved_area["polygon"])
@@ -398,6 +401,7 @@ def get_telemetry_payload():
     payload["imu"] = get_imu_snapshot()
     payload["pose"] = pose_tracker.snapshot()
     payload["active_area"] = cached_active_area()
+    payload["map_origin"] = _map_origin_cache["value"]
     payload["success"] = True
     return payload
 
@@ -411,20 +415,6 @@ def handle_set_auto_speed(speed_pct):
     except (TypeError, ValueError) as e:
         return {"success": False, "error": str(e)}
 
-
-def handle_set_area(width_m, height_m, origin_x=0, origin_y=0, name="Work area"):
-    """Set coverage area dimensions in metres."""
-    try:
-        width_m, height_m = float(width_m), float(height_m)
-        origin_x, origin_y = float(origin_x), float(origin_y)
-        set_area(width_m, height_m)
-        area = DB.save_area(name, origin_x, origin_y, origin_x + width_m, origin_y + height_m)
-        _area_cache["ts"] = 0.0  # force the cached active area to refresh
-        if not is_auto_active():
-            pose_tracker.reset(origin_x, origin_y, 0.0)
-        return {"success": True, "area_width_m": width_m, "area_height_m": height_m, "area": area}
-    except (TypeError, ValueError) as e:
-        return {"success": False, "error": str(e)}
 
 def emergency_stop_rover(reason="user disconnected"):
     global motor_status, sensor_servo_deployed
@@ -567,13 +557,6 @@ if HAS_SOCK:
                     elif cmd_type == "auto_speed":
                         res = handle_set_auto_speed(data.get("speed_pct", 70))
                         response.update(res)
-                    elif cmd_type == "set_area":
-                        res = handle_set_area(
-                            data.get("width_m", 10), data.get("height_m", 10),
-                            data.get("origin_x", 0), data.get("origin_y", 0),
-                            data.get("name", "Work area"),
-                        )
-                        response.update(res)
                     elif cmd_type == "camera_tilt":
                         angle = handle_camera_tilt(data.get("direction"))
                         response["current_angle"] = angle
@@ -696,22 +679,6 @@ def set_auto_speed_endpoint():
     broadcast_telemetry()
     return jsonify(res), 200
 
-@app.route('/set_area', methods=['GET', 'POST'])
-def set_area_endpoint():
-    if request.is_json:
-        width_m  = request.json.get('width_m',  10)
-        height_m = request.json.get('height_m', 10)
-    else:
-        width_m  = request.args.get('width_m',  10)
-        height_m = request.args.get('height_m', 10)
-    origin_x = request.args.get('origin_x', 0) if not request.is_json else request.json.get('origin_x', 0)
-    origin_y = request.args.get('origin_y', 0) if not request.is_json else request.json.get('origin_y', 0)
-    name = request.args.get('name', 'Work area') if not request.is_json else request.json.get('name', 'Work area')
-    res = handle_set_area(width_m, height_m, origin_x, origin_y, name)
-    broadcast_telemetry()
-    return jsonify(res), 200
-
-
 @app.route('/api/areas', methods=['GET'])
 def list_work_areas():
     return jsonify({"success": True, "areas": DB.list_areas()}), 200
@@ -719,14 +686,48 @@ def list_work_areas():
 
 @app.route('/api/areas/polygon', methods=['POST'])
 def save_polygon_work_area():
+    if is_auto_active():
+        return jsonify({"success": False, "error": "Stop autonomous mode before changing the work area"}), 409
     payload = request.get_json(silent=True) or {}
     try:
         points = payload.get("points", [])
-        area = DB.save_polygon_area(payload.get("name", "Work area"), points)
+        map_points = payload.get("map_points", [])
+        origin = payload.get("origin")
+        if len(points) < 3 or len(points) > 128 or len(map_points) != len(points):
+            raise ValueError("Provide 3 to 128 matching map boundary points")
+        if any(len(point) != 2 or not all(math.isfinite(float(value)) for value in point) for point in points):
+            raise ValueError("Boundary coordinates must be finite x/y values")
+        if any(len(point) != 2 or not (-85 <= float(point[0]) <= 85 and -180 <= float(point[1]) <= 180) for point in map_points):
+            raise ValueError("Boundary points must be valid latitude/longitude coordinates")
+        if not isinstance(origin, (list, tuple)) or len(origin) != 2:
+            raise ValueError("Set the rover start on the map before saving the boundary")
+        if not (-85 <= float(origin[0]) <= 85 and -180 <= float(origin[1]) <= 180):
+            raise ValueError("Rover start must be a valid latitude/longitude coordinate")
+        area = DB.save_polygon_area(payload.get("name", "Work area"), points, map_points, origin)
+        if origin and len(origin) == 2:
+            _map_origin_cache["value"] = DB.save_map_origin(origin[0], origin[1])
         set_area_polygon(points)
         _area_cache["ts"] = 0.0
         return jsonify({"success": True, "area": area, "coverage_mode": "polygon"}), 201
     except (TypeError, ValueError, KeyError, IndexError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+
+@app.route('/api/navigation/origin', methods=['POST'])
+def set_navigation_origin():
+    if is_auto_active() or motor_status != "STOPPED":
+        return jsonify({"success": False, "error": "Stop the rover before changing its map start"}), 409
+    payload = request.get_json(silent=True) or {}
+    try:
+        latitude = float(payload["latitude"])
+        longitude = float(payload["longitude"])
+        if not (-85.0 <= latitude <= 85.0 and -180.0 <= longitude <= 180.0):
+            raise ValueError("Map centre is outside supported coordinates")
+        _map_origin_cache["value"] = DB.save_map_origin(latitude, longitude)
+        pose_tracker.reset(0.0, 0.0, 0.0)
+        reset_imu_heading()
+        return jsonify({"success": True, "map_origin": [latitude, longitude]}), 200
+    except (KeyError, TypeError, ValueError) as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
 
 

@@ -47,6 +47,9 @@ class NavigationDatabase:
                     min_x REAL NOT NULL, min_y REAL NOT NULL,
                     max_x REAL NOT NULL, max_y REAL NOT NULL,
                     polygon_json TEXT,
+                    map_polygon_json TEXT,
+                    origin_lat REAL,
+                    origin_lon REAL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     active INTEGER NOT NULL DEFAULT 0
                 );
@@ -67,10 +70,18 @@ class NavigationDatabase:
                     pitch_deg REAL, roll_deg REAL, gyro_z_dps REAL,
                     FOREIGN KEY(run_id) REFERENCES rover_runs(id)
                 );
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             columns = {row[1] for row in conn.execute("PRAGMA table_info(work_areas)")}
             if "polygon_json" not in columns:
                 conn.execute("ALTER TABLE work_areas ADD COLUMN polygon_json TEXT")
+            for column, kind in (("map_polygon_json", "TEXT"), ("origin_lat", "REAL"), ("origin_lon", "REAL")):
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE work_areas ADD COLUMN {column} {kind}")
 
     @staticmethod
     def _area_dict(row):
@@ -82,6 +93,11 @@ class NavigationDatabase:
         except (TypeError, ValueError):
             area["polygon"] = []
         area.pop("polygon_json", None)
+        try:
+            area["map_polygon"] = json.loads(area.get("map_polygon_json") or "[]")
+        except (TypeError, ValueError):
+            area["map_polygon"] = []
+        area.pop("map_polygon_json", None)
         return area
 
     def save_area(self, name, min_x, min_y, max_x, max_y):
@@ -99,8 +115,8 @@ class NavigationDatabase:
             area_id = cur.lastrowid
         return self.get_area(area_id)
 
-    def save_polygon_area(self, name, points):
-        """Save a user-drawn polygon and make it the active work area."""
+    def save_polygon_area(self, name, points, map_points=None, origin=None):
+        """Save local metre points and optional geographic map coordinates."""
         clean = []
         for point in points:
             if not isinstance(point, (list, tuple)) or len(point) != 2:
@@ -116,9 +132,13 @@ class NavigationDatabase:
             raise ValueError("The work area must have width and height")
         with self.lock, self._connection() as conn:
             conn.execute("UPDATE work_areas SET active = 0")
+            geo = [[float(point[0]), float(point[1])] for point in (map_points or [])]
+            origin_lat = float(origin[0]) if origin else None
+            origin_lon = float(origin[1]) if origin else None
             cur = conn.execute(
-                "INSERT INTO work_areas(name,min_x,min_y,max_x,max_y,polygon_json,active) VALUES(?,?,?,?,?,?,1)",
-                (str(name or "Work area"), min_x, min_y, max_x, max_y, json.dumps(clean)),
+                "INSERT INTO work_areas(name,min_x,min_y,max_x,max_y,polygon_json,map_polygon_json,origin_lat,origin_lon,active) VALUES(?,?,?,?,?,?,?,?,?,1)",
+                (str(name or "Work area"), min_x, min_y, max_x, max_y, json.dumps(clean),
+                 json.dumps(geo), origin_lat, origin_lon),
             )
             area_id = cur.lastrowid
         return self.get_area(area_id)
@@ -136,6 +156,29 @@ class NavigationDatabase:
         with self.lock, self._connection() as conn:
             row = conn.execute("SELECT * FROM work_areas WHERE active = 1 ORDER BY id DESC LIMIT 1").fetchone()
             return self._area_dict(row)
+
+    def save_map_origin(self, latitude, longitude):
+        origin = [float(latitude), float(longitude)]
+        with self.lock, self._connection() as conn:
+            conn.execute(
+                "INSERT INTO app_settings(key,value) VALUES('map_origin',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+                (json.dumps(origin),),
+            )
+        return origin
+
+    def map_origin(self):
+        with self.lock, self._connection() as conn:
+            row = conn.execute("SELECT value FROM app_settings WHERE key='map_origin'").fetchone()
+            if not row:
+                return None
+            try:
+                value = json.loads(row["value"])
+                if len(value) == 2:
+                    return [float(value[0]), float(value[1])]
+            except (ValueError, TypeError):
+                pass
+            return None
 
     def start_run(self, area_id=None):
         with self.lock, self._connection() as conn:

@@ -20,7 +20,6 @@ const sidebar = document.getElementById("sidebar");
 const mobileBackdrop = document.getElementById("mobileBackdrop");
 const sidebarClock = document.getElementById("sidebarClock");
 const missionPercent = document.getElementById("missionPercent");
-const missionAreaLabel = document.getElementById("missionAreaLabel");
 const missionActionLabel = document.getElementById("missionActionLabel");
 const throttleOutput = document.getElementById("throttleOutput");
 
@@ -32,6 +31,7 @@ const autoProgressFill = document.getElementById("autoProgressFill");
 const areaNameInput = document.getElementById("areaNameInput");
 const roverMap = document.getElementById("roverMap");
 const poseText = document.getElementById("poseText");
+const mapCoordinateText = document.getElementById("mapCoordinateText");
 const videoFeed = document.getElementById("videoFeed");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
@@ -43,11 +43,20 @@ const wsURL = `${wsProtocol}//${window.location.host}/ws`;
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
-const poseTrail = [];
 let polygonDraft = [];
 let mapDrawing = false;
-let mapBounds = { min_x: -5, min_y: -5, max_x: 5, max_y: 5 };
+const mapOriginDefault = [6.5244, 3.3792];
+let mapOrigin = mapOriginDefault.slice();
 let lastPose = null;
+let leafletMap = null;
+let roverMarker = null;
+let workAreaLayer = null;
+let draftLayer = null;
+let trailLayer = null;
+let loadedAreaId = null;
+let loadedOrigin = false;
+const trailPoints = [];
+const EARTH_RADIUS_M = 6378137;
 
 // WebSocket state
 let ws = null;
@@ -61,8 +70,29 @@ let videoRetryAttempts = 0;
 const MAX_RECONNECT_DELAY_MS = 5000;
 
 // Initialize video feed source
-if (videoFeed) {
-  videoFeed.src = `${baseURL}/stream`;
+if (videoFeed) videoFeed.src = `${baseURL}/stream`;
+
+if (roverMap && window.L) {
+  leafletMap = L.map(roverMap, { zoomControl: true, scrollWheelZoom: true, wheelPxPerZoomLevel: 100 }).setView(mapOrigin, 18);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(leafletMap);
+  workAreaLayer = L.polygon([], { color: "#38d9cf", weight: 2, fillColor: "#38d9cf", fillOpacity: 0.13 }).addTo(leafletMap);
+  draftLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "5 5", fillColor: "#f2ba66", fillOpacity: 0.12 }).addTo(leafletMap);
+  trailLayer = L.polyline([], { color: "#a78bfa", weight: 3, opacity: 0.8 }).addTo(leafletMap);
+  roverMarker = L.marker(mapOrigin, { icon: L.divIcon({ className: "rover-map-marker", html: "<span>▲</span>", iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(leafletMap);
+  leafletMap.on("click", (event) => {
+    if (!mapDrawing || polygonDraft.length >= 128) return;
+    polygonDraft.push([event.latlng.lat, event.latlng.lng]);
+    draftLayer.setLatLngs(polygonDraft);
+    if (mapCoordinateText) mapCoordinateText.innerText = `${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
+    updateDrawHint();
+  });
+  leafletMap.on("mousemove", (event) => {
+    if (mapCoordinateText) mapCoordinateText.innerText = `${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
+  });
+  setTimeout(() => leafletMap.invalidateSize(), 100);
 }
 
 // ----------------- Video Feed Reconnection -----------------
@@ -268,99 +298,55 @@ function renderTelemetry(data) {
     updateAutoProgressUI(data.auto_progress);
   }
   if (data.pose) renderRoverMap(data.pose, data.active_area);
-  if (data.active_area && missionAreaLabel) {
-    missionAreaLabel.innerText = `${data.active_area.name} · ${data.active_area.max_x - data.active_area.min_x} × ${data.active_area.max_y - data.active_area.min_y} m`;
+  if (!data.active_area && Array.isArray(data.map_origin) && !loadedOrigin && leafletMap) {
+    mapOrigin = data.map_origin;
+    leafletMap.setView(mapOrigin, 18);
+    roverMarker.setLatLng(mapOrigin);
+    loadedOrigin = true;
   }
+}
+
+function geoToLocal(point, origin = mapOrigin) {
+  const lat = point[0] * Math.PI / 180;
+  const originLat = origin[0] * Math.PI / 180;
+  return [
+    EARTH_RADIUS_M * Math.cos(originLat) * (point[1] - origin[1]) * Math.PI / 180,
+    EARTH_RADIUS_M * (point[0] - origin[0]) * Math.PI / 180,
+  ];
+}
+
+function localToGeo(x, y, origin = mapOrigin) {
+  return [origin[0] + (y / EARTH_RADIUS_M) * 180 / Math.PI,
+    origin[1] + (x / (EARTH_RADIUS_M * Math.cos(origin[0] * Math.PI / 180))) * 180 / Math.PI];
 }
 
 function renderRoverMap(pose, area) {
-  if (!roverMap || !pose) return;
-  const ctx = roverMap.getContext("2d");
-  const w = roverMap.width;
-  const h = roverMap.height;
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#08111f";
-  ctx.fillRect(0, 0, w, h);
-
+  if (!leafletMap || !pose) return;
   lastPose = pose;
-  const bounds = area || { min_x: -5, min_y: -5, max_x: 5, max_y: 5 };
-  mapBounds = bounds;
-  if (area) window.activeWorkArea = area;
-  const pad = 28;
-  const spanX = Math.max(1, bounds.max_x - bounds.min_x);
-  const spanY = Math.max(1, bounds.max_y - bounds.min_y);
-  const scale = Math.min((w - pad * 2) / spanX, (h - pad * 2) / spanY);
-  const sx = (x) => pad + (x - bounds.min_x) * scale;
-  const sy = (y) => h - pad - (y - bounds.min_y) * scale;
-
-  ctx.strokeStyle = "rgba(56,189,248,.8)";
-  ctx.lineWidth = 2;
-  if (area && Array.isArray(area.polygon) && area.polygon.length >= 3) {
-    ctx.beginPath();
-    area.polygon.forEach((point, i) => i ? ctx.lineTo(sx(point[0]), sy(point[1])) : ctx.moveTo(sx(point[0]), sy(point[1])));
-    ctx.closePath();
-    ctx.fillStyle = "rgba(57,217,208,.08)";
-    ctx.fill();
-    ctx.stroke();
-  } else {
-    ctx.strokeRect(sx(bounds.min_x), sy(bounds.max_y), spanX * scale, spanY * scale);
+  if (area) {
+    window.activeWorkArea = area;
+    if (loadedAreaId !== area.id) {
+      if (Number.isFinite(area.origin_lat) && Number.isFinite(area.origin_lon)) {
+        mapOrigin = [area.origin_lat, area.origin_lon];
+        loadedOrigin = true;
+      }
+      const areaPoints = Array.isArray(area.map_polygon) ? area.map_polygon : [];
+      workAreaLayer.setLatLngs(areaPoints);
+      if (areaPoints.length >= 3) {
+        leafletMap.fitBounds(workAreaLayer.getBounds(), { padding: [24, 24], maxZoom: 18 });
+      } else if (Number.isFinite(area.origin_lat) && Number.isFinite(area.origin_lon)) {
+        leafletMap.setView(mapOrigin, 18);
+      }
+      loadedAreaId = area.id;
+    }
   }
-  ctx.strokeStyle = "rgba(148,163,184,.18)";
-  ctx.lineWidth = 1;
-  for (let x = Math.ceil(bounds.min_x); x <= bounds.max_x; x++) {
-    ctx.beginPath(); ctx.moveTo(sx(x), pad); ctx.lineTo(sx(x), h - pad); ctx.stroke();
-  }
-  for (let y = Math.ceil(bounds.min_y); y <= bounds.max_y; y++) {
-    ctx.beginPath(); ctx.moveTo(pad, sy(y)); ctx.lineTo(w - pad, sy(y)); ctx.stroke();
-  }
-
-  poseTrail.push({ x: pose.x_m, y: pose.y_m });
-  if (poseTrail.length > 300) poseTrail.shift();
-  ctx.strokeStyle = "#a78bfa";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  poseTrail.forEach((p, i) => i ? ctx.lineTo(sx(p.x), sy(p.y)) : ctx.moveTo(sx(p.x), sy(p.y)));
-  ctx.stroke();
-
-  if (polygonDraft.length) {
-    ctx.strokeStyle = "#f2ba66";
-    ctx.fillStyle = "rgba(242,186,102,.12)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    polygonDraft.forEach((point, i) => i ? ctx.lineTo(sx(point[0]), sy(point[1])) : ctx.moveTo(sx(point[0]), sy(point[1])));
-    if (polygonDraft.length >= 3) ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    polygonDraft.forEach((point) => {
-      ctx.fillStyle = "#f2ba66";
-      ctx.beginPath(); ctx.arc(sx(point[0]), sy(point[1]), 4, 0, Math.PI * 2); ctx.fill();
-    });
-  }
-
-  const rx = sx(pose.x_m), ry = sy(pose.y_m);
-  const angle = -((pose.heading_deg || 0) * Math.PI / 180);
-  ctx.save();
-  ctx.translate(rx, ry); ctx.rotate(angle);
-  ctx.fillStyle = "#22c55e";
-  ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-9, -7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
-  ctx.restore();
-  ctx.fillStyle = "#e2e8f0";
-  ctx.font = "12px sans-serif";
-  ctx.fillText(`${pose.x_m.toFixed(2)} m, ${pose.y_m.toFixed(2)} m`, Math.min(w - 150, rx + 12), Math.max(14, ry - 12));
-  if (poseText) poseText.innerText = `X ${pose.x_m.toFixed(2)} m · Y ${pose.y_m.toFixed(2)} m · ${pose.heading_deg.toFixed(1)}°`;
-}
-
-function mapToWorld(event) {
-  const rect = roverMap.getBoundingClientRect();
-  const px = (event.clientX - rect.left) * (roverMap.width / rect.width);
-  const py = (event.clientY - rect.top) * (roverMap.height / rect.height);
-  const pad = 28;
-  const spanX = Math.max(1, mapBounds.max_x - mapBounds.min_x);
-  const spanY = Math.max(1, mapBounds.max_y - mapBounds.min_y);
-  const scale = Math.min((roverMap.width - pad * 2) / spanX, (roverMap.height - pad * 2) / spanY);
-  return [
-    Number((mapBounds.min_x + (px - pad) / scale).toFixed(2)),
-    Number((mapBounds.min_y + (roverMap.height - pad - py) / scale).toFixed(2)),
-  ];
+  const roverGeo = localToGeo(pose.x_m, pose.y_m);
+  roverMarker.setLatLng(roverGeo);
+  roverMarker.setIcon(L.divIcon({ className: "rover-map-marker", html: `<span style="transform:rotate(${90 - (pose.heading_deg || 0)}deg)">▲</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }));
+  trailPoints.push(roverGeo);
+  if (trailPoints.length > 200) trailPoints.shift();
+  trailLayer.setLatLngs(trailPoints);
+  if (poseText) poseText.innerText = `${pose.x_m.toFixed(1)}m, ${pose.y_m.toFixed(1)}m · ${pose.heading_deg.toFixed(0)}°`;
 }
 
 function toggleMapDrawing() {
@@ -368,22 +354,50 @@ function toggleMapDrawing() {
   const button = document.getElementById("drawAreaBtn");
   const hint = document.getElementById("drawHint");
   if (button) button.classList.toggle("active", mapDrawing);
-  if (hint) hint.innerText = mapDrawing ? "Click 3 or more points around the work area" : "Draw a boundary by clicking map points";
-  if (roverMap) roverMap.classList.toggle("drawing", mapDrawing);
+  if (hint) hint.innerText = mapDrawing ? "Tap/click boundary points · drag map to pan" : "Pan and zoom, then set rover start";
+  if (leafletMap) leafletMap.getContainer().classList.toggle("drawing", mapDrawing);
+}
+
+function updateDrawHint() {
+  const hint = document.getElementById("drawHint");
+  if (hint) hint.innerText = `${polygonDraft.length} points · need 3+ · drag map to pan`;
+  draftLayer.setLatLngs(polygonDraft);
 }
 
 function undoPolygonPoint() {
   polygonDraft.pop();
-  const hint = document.getElementById("drawHint");
-  if (hint) hint.innerText = polygonDraft.length ? `${polygonDraft.length} point${polygonDraft.length === 1 ? "" : "s"} selected · add at least 3` : "Draw a boundary by clicking map points";
-  if (lastPose) renderRoverMap(lastPose, window.activeWorkArea);
+  updateDrawHint();
 }
 
 function clearPolygon() {
   polygonDraft = [];
-  const hint = document.getElementById("drawHint");
-  if (hint) hint.innerText = "Draw a boundary by clicking map points";
-  if (lastPose) renderRoverMap(lastPose, window.activeWorkArea);
+  updateDrawHint();
+}
+
+function setRoverStart() {
+  if (!leafletMap) return;
+  const previousOrigin = mapOrigin;
+  const selectedOrigin = [leafletMap.getCenter().lat, leafletMap.getCenter().lng];
+  mapOrigin = selectedOrigin;
+  if (mapCoordinateText) mapCoordinateText.innerText = `${selectedOrigin[0].toFixed(5)}, ${selectedOrigin[1].toFixed(5)}`;
+  fetch(`${baseURL}/api/navigation/origin`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ latitude: selectedOrigin[0], longitude: selectedOrigin[1] }),
+  }).then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) throw new Error(data.error || "Could not set rover start");
+      trailPoints.length = 0;
+      loadedOrigin = true;
+      roverMarker.setLatLng(selectedOrigin);
+      showToast("Rover start set at map centre");
+    }).catch((error) => {
+      mapOrigin = previousOrigin;
+      showToast(error.message);
+    });
+}
+
+function centerMapOnRover() {
+  if (leafletMap && roverMarker) leafletMap.setView(roverMarker.getLatLng(), Math.max(leafletMap.getZoom(), 18));
 }
 
 function savePolygonArea() {
@@ -392,10 +406,11 @@ function savePolygonArea() {
     return;
   }
   const name = (areaNameInput && areaNameInput.value) || "Map work area";
+  const localPoints = polygonDraft.map((point) => geoToLocal(point));
   fetch(`${baseURL}/api/areas/polygon`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, points: polygonDraft }),
+    body: JSON.stringify({ name, points: localPoints, map_points: polygonDraft, origin: mapOrigin }),
   }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
     .then(({ ok, data }) => {
       if (!ok) throw new Error(data.error || "Could not save boundary");
@@ -404,20 +419,13 @@ function savePolygonArea() {
       const button = document.getElementById("drawAreaBtn");
       if (button) button.classList.remove("active");
       window.activeWorkArea = data.area;
+      loadedAreaId = data.area.id;
+      workAreaLayer.setLatLngs(data.area.map_polygon || []);
+      draftLayer.setLatLngs([]);
       if (lastPose) renderRoverMap(lastPose, data.area);
       showToast("Multi-coordinate work area saved");
     })
     .catch((error) => showToast(error.message));
-}
-
-if (roverMap) {
-  roverMap.addEventListener("click", (event) => {
-    if (!mapDrawing) return;
-    polygonDraft.push(mapToWorld(event));
-    const hint = document.getElementById("drawHint");
-    if (hint) hint.innerText = `${polygonDraft.length} point${polygonDraft.length === 1 ? "" : "s"} selected · add at least 3`;
-    if (lastPose) renderRoverMap(lastPose, window.activeWorkArea);
-  });
 }
 
 function updateAutoProgressUI(prog) {
