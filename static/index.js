@@ -893,3 +893,29 @@ window.addEventListener("beforeunload", () => {
 
 // Initialize WebSocket on page load
 initWebSocket();
+
+// Injecting 3D orientation update logic into renderTelemetry dynamically
+const originalRenderTelemetry = renderTelemetry;
+renderTelemetry = function(data) {
+  originalRenderTelemetry(data);
+  if (data.imu) {
+    const pitch = data.imu.pitch_deg || 0;
+    const roll = data.imu.roll_deg || 0;
+    const yaw = data.imu.heading_deg || 0;
+    
+    const valPitch = document.getElementById("valPitch");
+    const valRoll = document.getElementById("valRoll");
+    const valYaw = document.getElementById("valYaw");
+    
+    if (valPitch) valPitch.innerText = pitch.toFixed(1);
+    if (valRoll) valRoll.innerText = roll.toFixed(1);
+    if (valYaw) valYaw.innerText = yaw.toFixed(1);
+    
+    const model = document.getElementById("rover3dModel");
+    if (model) {
+      // CSS 3D transform mapping
+      model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg) rotateZ(${-yaw}deg)`;
+    }
+  }
+};
+

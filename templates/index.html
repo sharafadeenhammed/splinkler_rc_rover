@@ -30,6 +30,24 @@
         <section class="workspace-grid">
           <article class="panel camera-card"><div class="panel-head"><h3>Camera</h3><span class="live-tag"><i></i> LIVE</span></div><div class="video-frame"><img id="videoFeed" alt="Live rover camera" onerror="handleVideoError()"><div class="video-overlay"><span>CAM 01</span><span id="current-angle">0</span>°</div></div><div class="camera-controls"><span>Camera pan</span><div><button class="icon-btn" onclick="tiltCamera('left')">←</button><button class="camera-center" onclick="tiltCamera('center')">PAN</button><button class="icon-btn" onclick="tiltCamera('right')">→</button></div></div></article>
           <article class="panel map-card" id="navigation"><div class="panel-head"><div><h3>Work map</h3><span class="coordinate-readout" id="poseText">0.0m, 0.0m · 0°</span></div><div class="map-head-meta"><span class="gps-readout" id="gpsText">GPS —</span><span class="map-source" id="mapCoordinateText">OpenStreetMap</span></div></div><div class="map-toolbar"><span id="drawHint">Set origin at rover, then draw the work boundary</span><input id="areaNameInput" value="Work area" aria-label="Work area name"><button class="map-btn" onclick="centerMapOnRover()">Center</button><button class="map-btn primary-map" onclick="setRoverStart()">Origin here</button><button class="map-btn" id="drawAreaBtn" onclick="toggleMapDrawing()">Draw</button><button class="map-btn" onclick="undoPolygonPoint()">Undo</button><button class="map-btn" onclick="clearPolygon()">Clear</button><button class="map-btn save-map" onclick="savePolygonArea()">Save</button></div><div id="roverMap" aria-label="OpenStreetMap work area selector"></div></article>
+          <article class="panel orientation-card">
+            <div class="panel-head"><h3>Orientation</h3></div>
+            <div class="orientation-container">
+              <div class="rover-3d-model" id="rover3dModel">
+                <div class="rover-body"></div>
+                <div class="rover-front"></div>
+                <div class="rover-wheel fl"></div>
+                <div class="rover-wheel fr"></div>
+                <div class="rover-wheel rl"></div>
+                <div class="rover-wheel rr"></div>
+              </div>
+            </div>
+            <div class="orientation-stats">
+              <div>Pitch: <span id="valPitch" style="color:var(--cyan)">0</span>&deg;</div>
+              <div>Roll: <span id="valRoll" style="color:var(--cyan)">0</span>&deg;</div>
+              <div>Yaw: <span id="valYaw" style="color:var(--cyan)">0</span>&deg;</div>
+            </div>
+          </article>
         </section>
         <section class="manual-dock" id="manualDock" aria-label="Manual drive controls">
           <div class="manual-dock-head"><span class="manual-dock-label">Manual drive</span><span class="control-hint compact">Hold buttons or WASD · Space stops</span></div>
