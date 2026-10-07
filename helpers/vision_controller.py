@@ -19,17 +19,26 @@ def set_latest_frame(jpeg_bytes):
 def get_latest_frame():
     return latest_jpeg_frame
 
+last_analyzed_frame_id = None
+last_analyzed_result = ("CLEAR", 0, 0)
+
 def analyze_visual_edges(jpg_bytes=None):
     """
     Lightweight Canny Edge & Barrier Detection optimized for Raspberry Pi Zero W (ARMv6 512MB RAM).
     Downscales frame to 160x120 and evaluates lower ground ROI edge density.
     """
-    global vision_status
+    global vision_status, last_analyzed_frame_id, last_analyzed_result
     frame_to_process = jpg_bytes if jpg_bytes is not None else latest_jpeg_frame
 
     if not OPENCV_AVAILABLE or not frame_to_process:
         vision_status = "CLEAR"
         return "CLEAR", 0, 0
+        
+    frame_id = id(frame_to_process)
+    if frame_id == last_analyzed_frame_id:
+        vision_status = last_analyzed_result[0]
+        return last_analyzed_result
+        
     try:
         np_arr = np.frombuffer(frame_to_process, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
@@ -59,14 +68,17 @@ def analyze_visual_edges(jpg_bytes=None):
         
         if total_density > EDGE_BARRIER_THRESHOLD:
             if left_density > right_density:
-                vision_status = "OBSTACLE_LEFT"
-                return "OBSTACLE_LEFT", left_density, right_density
+                status = "OBSTACLE_LEFT"
             else:
-                vision_status = "OBSTACLE_RIGHT"
-                return "OBSTACLE_RIGHT", left_density, right_density
-                
-        vision_status = "CLEAR"
-        return "CLEAR", left_density, right_density
+                status = "OBSTACLE_RIGHT"
+        else:
+            status = "CLEAR"
+            
+        vision_status = status
+        last_analyzed_frame_id = frame_id
+        last_analyzed_result = (status, left_density, right_density)
+        return last_analyzed_result
+        
     except Exception as e:
         print(f"⚠️ Visual analysis error: {e}")
         vision_status = "CLEAR"
