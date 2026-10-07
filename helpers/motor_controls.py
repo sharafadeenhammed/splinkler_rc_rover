@@ -62,11 +62,16 @@ def reverse(speed=1.0):
     else:
         _drive_reverse(speed)
 
+last_left_speed = None
+last_right_speed = None
+
 def drive_tank(left_speed, right_speed):
     """
     Independent tank-track style control.
     Positive speeds go forward, negative go reverse.
     """
+    global last_left_speed, last_right_speed
+    
     # Bound speeds to -1.0 to 1.0
     left_speed = max(-1.0, min(1.0, left_speed))
     right_speed = max(-1.0, min(1.0, right_speed))
@@ -75,23 +80,39 @@ def drive_tank(left_speed, right_speed):
         left_speed = -left_speed
         right_speed = -right_speed
 
-    # Clear both legs before selecting a direction.  This avoids briefly
-    # driving both H-bridge inputs during a forward/reverse transition.
+    # Avoid redundant RPC calls to pigpiod if speeds haven't changed
+    if left_speed == last_left_speed and right_speed == last_right_speed:
+        return
+
     with _motor_lock:
-        LEFT_MOTOR_FORWARD.value = 0
-        LEFT_MOTOR_REVERSE.value = 0
-        RIGHT_MOTOR_FORWARD.value = 0
-        RIGHT_MOTOR_REVERSE.value = 0
-
+        # Left motor
+        if last_left_speed is None or (left_speed >= 0) != (last_left_speed >= 0):
+            LEFT_MOTOR_FORWARD.value = 0
+            LEFT_MOTOR_REVERSE.value = 0
+            
         if left_speed >= 0:
-            LEFT_MOTOR_FORWARD.value = left_speed
+            if last_left_speed is None or LEFT_MOTOR_FORWARD.value != left_speed:
+                LEFT_MOTOR_FORWARD.value = left_speed
         else:
-            LEFT_MOTOR_REVERSE.value = abs(left_speed)
+            abs_left = abs(left_speed)
+            if last_left_speed is None or LEFT_MOTOR_REVERSE.value != abs_left:
+                LEFT_MOTOR_REVERSE.value = abs_left
 
+        # Right motor
+        if last_right_speed is None or (right_speed >= 0) != (last_right_speed >= 0):
+            RIGHT_MOTOR_FORWARD.value = 0
+            RIGHT_MOTOR_REVERSE.value = 0
+            
         if right_speed >= 0:
-            RIGHT_MOTOR_FORWARD.value = right_speed
+            if last_right_speed is None or RIGHT_MOTOR_FORWARD.value != right_speed:
+                RIGHT_MOTOR_FORWARD.value = right_speed
         else:
-            RIGHT_MOTOR_REVERSE.value = abs(right_speed)
+            abs_right = abs(right_speed)
+            if last_right_speed is None or RIGHT_MOTOR_REVERSE.value != abs_right:
+                RIGHT_MOTOR_REVERSE.value = abs_right
+                
+    last_left_speed = left_speed
+    last_right_speed = right_speed
 
 
 def turnRight(speed=1.0):
