@@ -1,41 +1,48 @@
-from gpiozero import DistanceSensor
-from gpiozero.pins.pigpio import PiGPIOFactory
+import pigpio
+import time
 from constants import PINOUT
 
-pigpio_factory = PiGPIOFactory()
-distance_sensor = None
+pi = pigpio.pi()
 ultrasonic_enabled = True
+current_distance_cm = 0.0
+
+TRIGGER_PIN = PINOUT.PIN31
+ECHO_PIN = PINOUT.PIN32
+
+_ping_start_tick = None
+_cb = None
+
+def _echo_callback(gpio, level, tick):
+    global _ping_start_tick, current_distance_cm
+    if level == 1:
+        _ping_start_tick = tick
+    elif level == 0 and _ping_start_tick is not None:
+        diff = pigpio.tickDiff(_ping_start_tick, tick)
+        # Speed of sound ~34300 cm/s -> 0.0343 cm/us -> divide by 2 for round trip = 0.01715
+        dist = diff * 0.01715
+        current_distance_cm = round(min(dist, 400.0), 1)
+        _ping_start_tick = None
 
 def init_ultrasonic_hardware():
-    global distance_sensor
-    if distance_sensor is not None:
-        return distance_sensor
+    global _cb
+    if not pi.connected:
+        print("⚠️ pigpio not connected. Ultrasonic sensor disabled.")
+        return False
+    if _cb is not None:
+        return True
     try:
-        distance_sensor = DistanceSensor(
-            echo=PINOUT.PIN32,
-            trigger=PINOUT.PIN31,
-            max_distance=4.0,
-            pin_factory=pigpio_factory
-        )
-        print("🔊 Ultrasonic Distance Sensor initialized (pigpio).")
+        pi.set_mode(TRIGGER_PIN, pigpio.OUTPUT)
+        pi.set_mode(ECHO_PIN, pigpio.INPUT)
+        pi.write(TRIGGER_PIN, 0)
+        _cb = pi.callback(ECHO_PIN, pigpio.EITHER_EDGE, _echo_callback)
+        print("🔊 Ultrasonic Distance Sensor initialized (pigpio manual trigger).")
+        return True
     except Exception as e:
-        print(f"⚠️ Ultrasonic init (pigpio) error: {e}. Trying default factory...")
-        try:
-            distance_sensor = DistanceSensor(
-                echo=PINOUT.PIN32,
-                trigger=PINOUT.PIN31,
-                max_distance=4.0
-            )
-            print("🔊 Ultrasonic Distance Sensor initialized (default).")
-        except Exception as err:
-            print(f"⚠️ Ultrasonic hardware not detected: {err}")
-            distance_sensor = None
-    return distance_sensor
+        print(f"⚠️ Ultrasonic init error: {e}")
+        return False
 
 # Initialize on startup if enabled
 init_ultrasonic_hardware()
-
-current_distance_cm = 0.0
 
 def enable_ultrasonic():
     global ultrasonic_enabled
@@ -51,7 +58,6 @@ def disable_ultrasonic():
     return False
 
 def toggle_ultrasonic():
-    global ultrasonic_enabled
     if ultrasonic_enabled:
         return disable_ultrasonic()
     else:
@@ -62,18 +68,18 @@ def is_ultrasonic_enabled():
 
 def get_distance_cm():
     global current_distance_cm
-    if not ultrasonic_enabled or distance_sensor is None:
+    if not ultrasonic_enabled or not pi.connected:
         return None
     try:
-        dist_m = distance_sensor.distance
-        current_distance_cm = round(dist_m * 100.0, 1)
+        # Trigger a 10 microsecond pulse
+        pi.gpio_trigger(TRIGGER_PIN, 10, 1)
+        # The callback will update current_distance_cm asynchronously.
         return current_distance_cm
     except Exception as e:
         print(f"⚠️ Ultrasonic read error: {e}")
         return current_distance_cm
 
 __all__ = [
-    "distance_sensor",
     "get_distance_cm",
     "enable_ultrasonic",
     "disable_ultrasonic",
