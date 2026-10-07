@@ -158,7 +158,7 @@ class SharedCameraStream:
         command = [
             "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "25",
             "--inline", "-o", "-", "--width", "160", "--height", "120",
-            "--framerate", "4", "-n",
+            "--framerate", "4", "-n", "--denoise", "cdn_off",
         ]
         try:
             self.process = subprocess.Popen(
