@@ -507,7 +507,7 @@ def emergency_stop_rover(reason="user disconnected"):
 # then motors/pump/auto) BEFORE the kernel gets desperate.
 MEMINFO_PATH = "/proc/meminfo"
 MEM_WARN_MB = float(os.environ.get("MEM_WARN_MB", "80"))
-MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "50"))
+MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "60"))
 _mem_warned = False
 
 
