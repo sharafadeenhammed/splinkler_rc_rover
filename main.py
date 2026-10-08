@@ -7,6 +7,8 @@ import subprocess
 import json
 import select
 import math
+import atexit
+import gc
 from flask import Flask, Response, render_template, request, jsonify
 
 # Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
@@ -137,9 +139,12 @@ class SharedCameraStream:
         self.sequence = 0
         self.frame = None  # Keep only the latest JPEG in RAM.
         self.last_client_at = time.monotonic()
+        self.blocked_until = 0.0  # memory watchdog cooldown (monotonic)
 
     def subscribe(self):
         with self.lock:
+            if time.monotonic() < self.blocked_until:
+                return False
             if self.clients >= 1:
                 return False
             self.clients = 1
@@ -152,6 +157,18 @@ class SharedCameraStream:
         with self.condition:
             self.clients = 0
             self.last_client_at = time.monotonic()
+            self.condition.notify_all()
+
+    def stop(self, reason="idle", cooldown_sec=0.0):
+        """Kill the camera process now (memory pressure) and optionally refuse
+        to restart for cooldown_sec — the dashboard retries /stream on a timer,
+        so without a cooldown the camera would thrash straight back on."""
+        with self.condition:
+            self.clients = 0
+            self.last_client_at = 0.0  # reader thread sees idle immediately
+            if cooldown_sec:
+                self.blocked_until = time.monotonic() + cooldown_sec
+            print(f"📷 Camera stopped ({reason}).")
             self.condition.notify_all()
 
     def _start_locked(self):
@@ -413,6 +430,7 @@ def get_telemetry_payload():
     payload["active_area"] = cached_active_area()
     payload["map_origin"] = _map_origin_cache["value"]
     payload["gps"] = get_gps().get()
+    payload["memory"] = read_meminfo()
     payload["success"] = True
     return payload
 
@@ -482,6 +500,89 @@ def emergency_stop_rover(reason="user disconnected"):
     except Exception as e:
         print(f"⚠️ Failsafe servo retract error: {e}")
 
+# ----------------- Memory watchdog (Pi Zero W, 512 MB total) ----------------
+# The rover shares 512 MB with the Wi-Fi firmware.  When RAM runs out the
+# brcmfmac driver fails to allocate its buffers and Wi-Fi dies until a power
+# cycle, stranding the operator.  This watchdog sheds load (camera first,
+# then motors/pump/auto) BEFORE the kernel gets desperate.
+MEMINFO_PATH = "/proc/meminfo"
+MEM_WARN_MB = float(os.environ.get("MEM_WARN_MB", "60"))
+MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "30"))
+_mem_warned = False
+
+
+def read_meminfo(path=MEMINFO_PATH):
+    """Parse /proc/meminfo -> {"mem_total_mb", "mem_available_mb"} or None."""
+    try:
+        values = {}
+        with open(path, "r") as handle:
+            for line in handle:
+                key, sep, rest = line.partition(":")
+                if not sep:
+                    continue
+                parts = rest.split()
+                if parts:
+                    values[key] = float(parts[0]) / 1024.0  # kB -> MB
+        if "MemAvailable" not in values:
+            return None
+        return {
+            "mem_total_mb": values.get("MemTotal"),
+            "mem_available_mb": values["MemAvailable"],
+        }
+    except (OSError, ValueError):
+        return None
+
+
+def memory_watchdog_loop():
+    """Shed load on low memory so the Pi keeps its Wi-Fi connection."""
+    global _mem_warned
+    print("🧠 Memory watchdog started.")
+    while True:
+        try:
+            time.sleep(5.0)
+            mem = read_meminfo()
+            if mem is None:
+                continue
+            avail = mem["mem_available_mb"]
+
+            # Camera is the biggest optional consumer: shed it first.  Also
+            # shed again if the dashboard reconnected it while still low.
+            if avail < MEM_WARN_MB and (not _mem_warned or camera_stream.clients >= 1):
+                print(f"⚠️ LOW MEMORY: {avail:.0f} MB available - shedding camera stream")
+                camera_stream.stop("low memory", cooldown_sec=60.0)
+                gc.collect()
+
+            # Never let the rover keep driving on a starved board.
+            if (avail < MEM_CRITICAL_MB and
+                    (is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn())):
+                print(f"🛑 CRITICAL MEMORY: {avail:.0f} MB available - emergency stop")
+                emergency_stop_rover(f"low memory ({avail:.0f} MB)")
+                camera_stream.stop("memory critical", cooldown_sec=120.0)
+                gc.collect()
+
+            _mem_warned = avail < MEM_WARN_MB
+        except Exception as exc:
+            print(f"⚠️ Memory watchdog error: {exc}")
+            time.sleep(5.0)
+
+
+def _atexit_stop():
+    """Cut motors/pump on any orderly exit (Ctrl-C, systemctl stop, crash)."""
+    try:
+        emergency_stop_rover("process exiting")
+    except Exception:
+        pass
+
+
+def _sigterm_handler(signum, frame):
+    """systemd stop/restart: stop hardware, then exit so atexit can finish."""
+    try:
+        emergency_stop_rover(f"signal {signum}")
+    except Exception:
+        pass
+    sys.exit(0)
+
+
 def broadcast_telemetry(payload=None):
     if not HAS_SOCK:
         return
@@ -510,23 +611,33 @@ def ws_telemetry_broadcast_loop():
         except Exception as e:
             time.sleep(1.0)
 
-# Mount background tasks on server start
+# Mount background tasks on server start.  The lock prevents duplicate loops
+# when the dashboard fires several first requests at once (page + /stream +
+# telemetry + WS connect), which would waste CPU and memory on this board.
+_threads_lock = threading.Lock()
+
 @app.before_request
 def initialize_background_threads():
-    if not getattr(app, 'sensor_thread_started', False):
-        bg_thread = threading.Thread(target=read_sensor_loop, daemon=True)
-        bg_thread.start()
-        app.sensor_thread_started = True
+    with _threads_lock:
+        if not getattr(app, 'sensor_thread_started', False):
+            bg_thread = threading.Thread(target=read_sensor_loop, daemon=True)
+            bg_thread.start()
+            app.sensor_thread_started = True
 
-    if not getattr(app, 'navigation_thread_started', False):
-        nav_thread = threading.Thread(target=navigation_loop, daemon=True)
-        nav_thread.start()
-        app.navigation_thread_started = True
+        if not getattr(app, 'navigation_thread_started', False):
+            nav_thread = threading.Thread(target=navigation_loop, daemon=True)
+            nav_thread.start()
+            app.navigation_thread_started = True
 
-    if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
-        ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
-        ws_thread.start()
-        app.ws_broadcast_started = True
+        if not getattr(app, 'memory_watchdog_started', False):
+            mem_thread = threading.Thread(target=memory_watchdog_loop, daemon=True)
+            mem_thread.start()
+            app.memory_watchdog_started = True
+
+        if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
+            ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
+            ws_thread.start()
+            app.ws_broadcast_started = True
 
 # WebSocket Endpoint
 if HAS_SOCK:
@@ -812,6 +923,11 @@ def navigation_runs():
     return jsonify({"success": True, "runs": DB.recent_runs()}), 200
 
 if __name__ == '__main__':
+    # Cut motors/pump on any orderly exit.  If the OOM killer SIGKILLs this
+    # process instead, deploy/rover.service's ExecStopPost runs
+    # deploy/emergency_stop.py as the backstop.
+    atexit.register(_atexit_stop)
+    signal.signal(signal.SIGTERM, _sigterm_handler)
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
     # threaded=True allows multiple backend connections without blocking
     # debug=False: debug mode adds overhead and exposes the Werkzeug debugger to the network

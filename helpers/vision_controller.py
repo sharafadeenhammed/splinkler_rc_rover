@@ -2,17 +2,20 @@
 
 import threading
 
-# OpenCV + numpy are the slowest imports in the startup path (1-3 s on a
-# Pi Zero W).  They are loaded in a background thread so importing this
-# module stays instant; analyze_visual_edges() waits (bounded) for the load
-# on first use instead of silently reporting CLEAR while cv2 is still
-# importing.
+# OpenCV + numpy are the biggest RAM consumers in this app (~80-150 MB on a
+# Pi Zero W) and were historically imported at startup, starving the 512 MB
+# board until the Wi-Fi firmware failed to allocate memory.  They are now
+# imported ONLY when a frame is actually analysed (i.e. autonomous mode is
+# running); manual driving never loads them.  The import runs in a background
+# thread, and the first analysis waits (bounded) for it instead of silently
+# reporting CLEAR while cv2 is still importing.
 OPENCV_AVAILABLE = False
 cv2 = None
 np = None
 
 _cv_load_done = threading.Event()
 _cv_load_lock = threading.Lock()
+_cv_loader_started = False
 
 
 def _load_opencv():
@@ -34,7 +37,21 @@ def _load_opencv():
         _cv_load_done.set()
 
 
-threading.Thread(target=_load_opencv, daemon=True, name="opencv-loader").start()
+def ensure_opencv_loaded(timeout=15.0):
+    """Start the background OpenCV import (once) and wait for it (bounded).
+
+    Called before the autonomous routine starts moving so obstacle vision is
+    ready while the rover is still stationary.  Returns True when OpenCV is
+    usable.  Safe to call repeatedly: after the loader finishes this is a
+    no-op, whether the load succeeded or not.
+    """
+    global _cv_loader_started
+    with _cv_load_lock:
+        if not _cv_loader_started:
+            _cv_loader_started = True
+            threading.Thread(target=_load_opencv, daemon=True, name="opencv-loader").start()
+    _cv_load_done.wait(timeout=timeout)
+    return OPENCV_AVAILABLE
 
 vision_status = "CLEAR"
 latest_jpeg_frame = None
@@ -56,15 +73,19 @@ def analyze_visual_edges(jpg_bytes=None):
     """
     global vision_status, last_analyzed_frame_id, last_analyzed_result
 
-    # First call may race the background OpenCV import: wait for it (bounded)
-    # rather than blind-reporting CLEAR.  After the loader finishes this is a
-    # no-op, whether OpenCV loaded or not.
-    if not OPENCV_AVAILABLE and not _cv_load_done.is_set():
-        _cv_load_done.wait(timeout=5.0)
-
     frame_to_process = jpg_bytes if jpg_bytes is not None else latest_jpeg_frame
 
-    if not OPENCV_AVAILABLE or not frame_to_process:
+    # No camera frame -> nothing to analyse, so never pay for OpenCV here.
+    # This is the common case while driving manually.
+    if not frame_to_process:
+        vision_status = "CLEAR"
+        return "CLEAR", 0, 0
+
+    # A real analysis is due: make sure OpenCV is loaded (bounded wait for the
+    # background import instead of blind-reporting CLEAR while it runs).
+    if not OPENCV_AVAILABLE:
+        ensure_opencv_loaded(timeout=5.0)
+    if not OPENCV_AVAILABLE:
         vision_status = "CLEAR"
         return "CLEAR", 0, 0
         
@@ -125,5 +146,6 @@ __all__ = [
     "set_latest_frame",
     "get_latest_frame",
     "analyze_visual_edges",
-    "get_vision_status"
+    "get_vision_status",
+    "ensure_opencv_loaded",
 ]

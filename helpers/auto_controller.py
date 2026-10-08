@@ -26,7 +26,7 @@ from helpers.motor_controls      import forward, reverse, turnRight, turnLeft, s
 from helpers.servo_controller    import sensor_servo
 from helpers.moisture_controller import MOISTURE_SENSOR
 from helpers.pump_controller     import WATER_PUMP
-from helpers.vision_controller   import analyze_visual_edges
+from helpers.vision_controller   import analyze_visual_edges, ensure_opencv_loaded
 from helpers.ultrasonic_controller import get_distance_cm
 from helpers.encoder_controller  import (
     get_encoder_ticks, reset_encoders, LEFT_ENCODER, RIGHT_ENCODER,
@@ -542,6 +542,11 @@ def autonomous_routine():
     auto_progress["strip"]        = 0
     auto_progress["phase"]        = "driving"
     auto_progress["coverage_pct"] = 0.0
+
+    # Load OpenCV now, while the rover is still stationary, so the first
+    # obstacle check does not block mid-drive (memory-friendly: this is the
+    # only code path that ever loads it).
+    ensure_opencv_loaded(timeout=15.0)
 
     enc_status = "ENCODERS ✅" if _has_encoders() else "TIME-BASED ⏱️ (no encoders)"
     print(f"🤖 Autonomous sweep START  –  area {AREA_WIDTH_M:.1f} m × {AREA_HEIGHT_M:.1f} m,  "
