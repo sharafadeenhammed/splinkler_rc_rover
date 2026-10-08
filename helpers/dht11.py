@@ -24,5 +24,6 @@ def readHumidityAndTemp():
   humidity = read_kernel_sensor(HUMID_FILE)
   return temperature, humidity
   
-  __all__ = ["readHumidityAndTemp"]
+
+__all__ = ["readHumidityAndTemp"]
   
