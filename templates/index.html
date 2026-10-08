@@ -36,13 +36,22 @@
           <div class="manual-speed"><span>Speed</span><input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider" aria-label="Manual drive speed"><output id="throttleOutput">50%</output><b id="targetVal" hidden>50</b></div>
           <div class="orientation-panel" aria-label="Rover orientation">
             <div class="rover-stage">
+              <div class="ground-shadow"></div>
               <div class="rover-3d-model" id="rover3dModel">
-                <div class="rover-body"></div>
-                <div class="rover-front"></div>
-                <div class="rover-wheel fl"></div>
-                <div class="rover-wheel fr"></div>
-                <div class="rover-wheel rl"></div>
-                <div class="rover-wheel rr"></div>
+                <span class="face c-top"></span>
+                <span class="face c-bottom"></span>
+                <span class="face c-front"></span>
+                <span class="face c-back"></span>
+                <span class="face c-left"></span>
+                <span class="face c-right"></span>
+                <span class="deck"></span>
+                <span class="dome"></span>
+                <span class="rail rail-l"></span>
+                <span class="rail rail-r"></span>
+                <div class="wheel w-fl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                <div class="wheel w-fr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                <div class="wheel w-rl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                <div class="wheel w-rr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
               </div>
             </div>
             <div class="orientation-stats">

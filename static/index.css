@@ -12,20 +12,42 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 @media(max-width:760px){:root{--manual-dock-h:118px;--sensor-dock-h:112px}html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;overflow:hidden}.sidebar.open{z-index:35}.mobile-backdrop.open{z-index:30}.app-content{height:100dvh;overflow:hidden;display:flex;flex-direction:column}.topbar{position:relative;z-index:12;height:58px;min-height:58px;padding:0 10px;flex-shrink:0}.mobile-menu{display:block}.dashboard{flex:1;min-height:0;height:auto;display:grid;grid-template-rows:minmax(0,1fr) auto auto;overflow:hidden;padding:9px;gap:8px}.workspace-grid{display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1.15fr);gap:8px;min-height:0}.camera-card,.map-card{padding:9px}.video-frame{min-height:0}.map-toolbar{flex-wrap:wrap;height:auto;white-space:normal}.map-toolbar>span{display:block;flex-basis:100%}.map-toolbar input{flex:1}.manual-dock{flex-wrap:wrap;align-items:center;gap:8px;padding:8px;position:relative;z-index:9;background:#0e141ef5;backdrop-filter:blur(10px)}.manual-dock-head{flex-direction:row;align-items:center;justify-content:space-between;width:100%;max-width:none}.manual-dock-head .control-hint.compact{max-width:none;text-align:right}.manual-speed{max-width:none;width:100%;order:3}.drive-pad--dock{margin:0 auto;order:2}.bottom-dock{position:relative;z-index:9;min-height:var(--sensor-dock-h);padding:7px;background:#101620f5;backdrop-filter:blur(10px);box-shadow:0 -4px 16px #0005}.sensor-strip{overflow-x:auto;gap:13px}.sensor-strip>div:not(.dock-progress){flex:none}.dock-controls{overflow-x:auto}.dock-controls label{flex:1 0 135px}.equipment-mini{flex:none}.topbar-status .status-pill{display:none}.page-heading{display:none}.toast{bottom:calc(var(--manual-dock-h) + var(--sensor-dock-h) + 20px + env(safe-area-inset-bottom,0px))}}
 
 /* Orientation now sits inline in the manual dock, on the same line as the drive controls. */
-.orientation-panel { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(16, 22, 32, .82); flex-shrink: 0; }
-.rover-stage { display: grid; place-items: center; width: 70px; height: 74px; perspective: 400px; }
-.rover-3d-model { position: relative; width: 44px; height: 68px; transform-style: preserve-3d; transition: transform 0.1s linear; transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
-.rover-body { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(57, 217, 208, 0.2); border: 2px solid var(--cyan); border-radius: 6px; transform: translateZ(8px); }
-.rover-front { position: absolute; top: 0; left: 0; right: 0; height: 11px; background: var(--cyan); border-radius: 5px 5px 0 0; transform: translateZ(8.5px); }
-.rover-wheel { position: absolute; width: 11px; height: 24px; background: #8a96a6; border-radius: 3px; box-shadow: inset 0 0 5px #000; }
-.rover-wheel.fl { top: 11px; left: -11px; }
-.rover-wheel.fr { top: 11px; right: -11px; }
-.rover-wheel.rl { bottom: 11px; left: -11px; }
-.rover-wheel.rr { bottom: 11px; right: -11px; }
-.orientation-stats { display: flex; gap: 12px; }
+/* Rich CSS 3D rover: real box geometry (6 chassis faces) built from CSS
+   custom properties so the whole model scales from a single override. */
+.orientation-panel { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(180deg, rgba(24, 33, 47, .92), rgba(13, 18, 27, .92)); flex-shrink: 0; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 3px 10px rgba(0,0,0,.35); }
+.rover-stage { position: relative; display: grid; place-items: center; width: 84px; height: 76px; perspective: 360px; }
+.ground-shadow { position: absolute; left: 50%; top: 72%; width: 58px; height: 15px; transform: translate(-50%, -50%); background: radial-gradient(ellipse at center, rgba(0,0,0,.6), transparent 68%); filter: blur(3px); }
+.rover-3d-model { --cw: 44px; --ch: 13px; --cl: 58px; --wd: 19px; --wt: 7px; --wa: 3px; position: relative; width: var(--cw); height: var(--ch); transform-style: preserve-3d; transition: transform 0.12s linear; }
+.rover-3d-model .face { position: absolute; left: 50%; top: 50%; backface-visibility: hidden; border-radius: 3px; }
+.c-top { width: var(--cw); height: var(--cl); transform: translate(-50%,-50%) rotateX(90deg) translateZ(calc(var(--ch)/2)); background-image: linear-gradient(90deg, transparent calc(50% - 1px), rgba(57,217,208,.8) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)), repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 7px, transparent 7px 14px), linear-gradient(160deg, #263550, #18222f 60%, #131a26); box-shadow: inset 0 0 0 1px rgba(57,217,208,.22); }
+.c-bottom { width: var(--cw); height: var(--cl); transform: translate(-50%,-50%) rotateX(-90deg) translateZ(calc(var(--ch)/2)); background: #0b1017; box-shadow: inset 0 0 12px rgba(0,0,0,.8); }
+.c-front { width: var(--cw); height: var(--ch); transform: translate(-50%,-50%) translateZ(calc(var(--cl)/2)); background-image: radial-gradient(circle at 30% 62%, rgba(224,252,255,.95) 0 2px, rgba(57,217,208,.5) 2px 4.5px, transparent 5.5px), radial-gradient(circle at 70% 62%, rgba(224,252,255,.95) 0 2px, rgba(57,217,208,.5) 2px 4.5px, transparent 5.5px), linear-gradient(180deg, #25334a, #172130); box-shadow: inset 0 1px 0 rgba(255,255,255,.10), inset 0 0 0 1px rgba(57,217,208,.20); }
+.c-back { width: var(--cw); height: var(--ch); transform: translate(-50%,-50%) rotateY(180deg) translateZ(calc(var(--cl)/2)); background-image: linear-gradient(rgba(255,111,125,.9), rgba(255,111,125,.9)), linear-gradient(180deg, #1a2534, #10171f); background-size: 55% 2.5px, 100% 100%; background-position: center; background-repeat: no-repeat; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
+.c-left, .c-right { width: var(--cl); height: var(--ch); background-image: linear-gradient(rgba(57,217,208,.5), rgba(57,217,208,.5)), repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 2px, transparent 2px 7px), linear-gradient(180deg, #26334a, #1a2433 55%, #121a26); background-size: 100% 1.5px, 100% 45%, 100% 100%; background-position: 0 74%, 0 18%, 0 0; background-repeat: no-repeat; box-shadow: inset 0 -3px 6px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.08); }
+.c-right { transform: translate(-50%,-50%) rotateY(90deg) translateZ(calc(var(--cw)/2)); }
+.c-left { transform: translate(-50%,-50%) rotateY(-90deg) translateZ(calc(var(--cw)/2)); }
+.deck { position: absolute; left: 50%; top: 50%; width: 26px; height: 34px; transform: translate(-50%,-50%) rotateX(90deg) translateZ(calc(var(--ch)/2 + 5px)); background-image: repeating-linear-gradient(0deg, rgba(57,217,208,.16) 0 1px, transparent 1px 8px), repeating-linear-gradient(90deg, rgba(57,217,208,.16) 0 1px, transparent 1px 8px), linear-gradient(140deg, #1e2b3e, #121a27); border: 1px solid rgba(57,217,208,.45); border-radius: 2px; box-shadow: 0 0 10px rgba(57,217,208,.28); }
+.dome { position: absolute; left: 50%; top: 50%; width: 11px; height: 11px; border-radius: 50%; transform: translate(-50%,-50%) rotateX(90deg) translateZ(calc(var(--ch)/2 + 10px)); background: radial-gradient(circle at 35% 30%, #b9cbe4, #59697f 45%, #212a38 75%); box-shadow: 0 0 9px rgba(57,217,208,.55), inset 0 -1px 2px rgba(0,0,0,.5); }
+.rail { position: absolute; left: 50%; top: 50%; width: var(--cl); height: 7px; transform: translate(-50%,-50%) translate3d(var(--rx), calc(var(--ch)/2 - 2px), 0) rotateY(var(--rry)); background: linear-gradient(180deg, #2c3b53, #1b2534); border-radius: 2px; box-shadow: inset 0 1px 0 rgba(255,255,255,.12); }
+.rail-l { --rx: calc(var(--cw)/-2 - 1px); --rry: -90deg; }
+.rail-r { --rx: calc(var(--cw)/2 + 1px); --rry: 90deg; }
+.wheel { position: absolute; left: 50%; top: 50%; width: var(--wd); height: var(--wd); transform-style: preserve-3d; transform: translate(-50%,-50%) translate3d(var(--wx), calc(var(--ch)/2 - 2px), var(--wz)) rotateY(var(--wry)); }
+.w-fl { --wx: calc(var(--cw)/-2 - var(--wa) - var(--wt)/2); --wz: calc(var(--cl)/2 - 12px); --wry: -90deg; }
+.w-fr { --wx: calc(var(--cw)/2 + var(--wa) + var(--wt)/2); --wz: calc(var(--cl)/2 - 12px); --wry: 90deg; }
+.w-rl { --wx: calc(var(--cw)/-2 - var(--wa) - var(--wt)/2); --wz: calc(var(--cl)/-2 + 12px); --wry: -90deg; }
+.w-rr { --wx: calc(var(--cw)/2 + var(--wa) + var(--wt)/2); --wz: calc(var(--cl)/-2 + 12px); --wry: 90deg; }
+.wheel .cap { position: absolute; inset: 0; border-radius: 50%; }
+.wheel .cap.out { transform: translateZ(calc(var(--wt)/2)); background-image: radial-gradient(circle, rgba(127,245,238,.95) 0 1.6px, #0c1017 1.6px 4.6px, transparent 4.6px), radial-gradient(circle, transparent 0 54%, rgba(9,13,19,.96) 54% 72%, #26303f 72% 80%, #0a0e14 80% 100%), repeating-conic-gradient(from 10deg, rgba(132,152,184,.55) 0 7deg, transparent 7deg 36deg), radial-gradient(circle, #232c3c 0 54%, #1a222e 54% 78%, #0b0f15 78% 100%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07), 0 1px 4px rgba(0,0,0,.5); }
+.wheel .cap.in { transform: rotateY(180deg) translateZ(calc(var(--wt)/2)); background: radial-gradient(circle, #161d29 0 58%, #0a0e14 58% 100%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.04); }
+.wheel .slice { position: absolute; left: 50%; top: 50%; width: var(--wd); height: var(--wt); transform: translate(-50%,-50%) rotateZ(var(--sa)) rotateX(90deg); background: repeating-linear-gradient(90deg, #1c232f 0 3px, #0e131a 3px 6px); border-radius: 99px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
+.wheel .s1 { --sa: 0deg; }
+.wheel .s2 { --sa: 60deg; }
+.wheel .s3 { --sa: 120deg; }
+.orientation-stats { display: flex; gap: 10px; }
 .o-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-family: 'DM Mono', monospace; }
-.o-stat small { font-size: 7px; letter-spacing: .12em; color: var(--muted); }
-.o-stat strong { font-size: 11px; font-weight: 500; color: var(--cyan); white-space: nowrap; }
+.o-stat + .o-stat { border-left: 1px solid var(--line); padding-left: 10px; }
+.o-stat small { font-size: 7px; letter-spacing: .12em; color: #5e6c80; }
+.o-stat strong { font-size: 11px; font-weight: 500; color: var(--cyan); white-space: nowrap; text-shadow: 0 0 8px rgba(57,217,208,.35); }
 
 /* Dock wraps the orientation onto its own line when the row gets tight (tablet). */
 @media (max-width: 1050px) {
@@ -48,8 +70,8 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
   #roverMap { height: 250px; min-height: 250px; flex: none; }
   .manual-dock { flex-wrap: wrap; gap: 8px; padding: 8px; }
   .orientation-panel { order: -1; width: 100%; }
-  .orientation-panel .rover-stage { width: 62px; height: 62px; }
-  .orientation-panel .rover-3d-model { width: 38px; height: 56px; }
+  .orientation-panel .rover-stage { width: 76px; height: 70px; }
+  .orientation-panel .rover-3d-model { --cw: 37px; --ch: 11px; --cl: 49px; --wd: 16px; --wt: 6px; }
   .manual-dock-head { order: 1; width: auto; flex-shrink: 0; }
   .manual-dock-head .control-hint.compact { display: none; }
   .manual-speed { order: 2; flex: 1; width: auto; max-width: none; min-width: 130px; }

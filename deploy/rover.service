@@ -19,7 +19,7 @@ RestartSec=3
 # (which restarts in 3 s) instead of letting brcmfmac fail to allocate and
 # killing Wi-Fi until a power cycle.  Tune down (e.g. 350M) once you know the
 # real peak RSS from:  journalctl -u rover -f  and  free -h
-MemoryMax=400M
+MemoryMax=300M
 # Make this service the OOM killer's first choice, ahead of wpa_supplicant /
 # brcmfmac (those have oom_score_adjust = 0 by default).
 OOMScoreAdjust=200

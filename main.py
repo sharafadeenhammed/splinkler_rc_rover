@@ -506,8 +506,8 @@ def emergency_stop_rover(reason="user disconnected"):
 # cycle, stranding the operator.  This watchdog sheds load (camera first,
 # then motors/pump/auto) BEFORE the kernel gets desperate.
 MEMINFO_PATH = "/proc/meminfo"
-MEM_WARN_MB = float(os.environ.get("MEM_WARN_MB", "60"))
-MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "30"))
+MEM_WARN_MB = float(os.environ.get("MEM_WARN_MB", "80"))
+MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "50"))
 _mem_warned = False
 
 
