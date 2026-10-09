@@ -808,7 +808,11 @@ if HAS_SOCK:
             pass
 
         last_activity = time.time()
-        CLIENT_HEARTBEAT_TIMEOUT_SEC = 6.0  # Watchdog: disconnect silent dead sockets
+        # Disconnect sockets that stop sending (the frontend pings every 2 s).
+        # 10 s rides out short radio stalls seen in the field without letting a
+        # driven rover run blind for long.  Override: WS_HEARTBEAT_TIMEOUT_SEC.
+        CLIENT_HEARTBEAT_TIMEOUT_SEC = float(os.environ.get("WS_HEARTBEAT_TIMEOUT_SEC", "10"))
+        ping_gap_warned = False
 
         try:
             while True:
@@ -816,12 +820,18 @@ if HAS_SOCK:
                 now = time.time()
 
                 if msg is None:
-                    # Check for dead socket timeout
-                    if now - last_activity > CLIENT_HEARTBEAT_TIMEOUT_SEC:
-                        print("⚠️ WebSocket client heartbeat timeout. Disconnecting...")
+                    gap = now - last_activity
+                    if gap > CLIENT_HEARTBEAT_TIMEOUT_SEC:
+                        print(f"⚠️ WebSocket client silent {gap:.0f}s - dropping connection")
                         break
+                    if gap >= 4.0 and not ping_gap_warned:
+                        print(f"⚠️ WS ping gap {gap:.0f}s - client messages stalled (radio path?)")
+                        ping_gap_warned = True
                     continue
 
+                if ping_gap_warned:
+                    print(f"✅ WS messages resumed after {now - last_activity:.0f}s stall")
+                    ping_gap_warned = False
                 last_activity = now
 
                 try:
