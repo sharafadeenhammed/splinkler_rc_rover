@@ -9,6 +9,31 @@ import select
 import math
 import atexit
 import gc
+
+# Line-buffer stdout: under systemd stdout is a journald socket and print()
+# output stays block-buffered for hours, hiding the memory watchdog's alerts
+# exactly when the operator needs to see them.  TTY (manual) runs unaffected.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except (AttributeError, ValueError, OSError):
+    pass
+
+# When launched manually (`python main.py`) there is no systemd unit to set
+# OOMScoreAdjust=200, so on a global OOM the kernel may kill wpa_supplicant /
+# dhcpcd first — or brcmfmac simply starves — and Wi-Fi dies until a power
+# cycle.  Raising our own OOM score needs no root, so in a manual run the
+# rover is always killed first and the network stack survives.  Under systemd
+# INVOCATION_ID is set and the unit's OOMScoreAdjust owns this setting.
+if "INVOCATION_ID" not in os.environ:
+    try:
+        with open("/proc/self/oom_score_adj", "w") as _oom_handle:
+            _oom_handle.write("500\n")
+        with open("/proc/self/oom_score_adj", "r") as _oom_handle:
+            _oom_value = _oom_handle.read().strip()
+        print(f"🛡️ Manual run: oom_score_adj=+{_oom_value} (rover dies first on OOM, Wi-Fi survives)")
+    except OSError as _oom_err:
+        print(f"⚠️ Could not raise oom_score_adj: {_oom_err}")
+
 from flask import Flask, Response, render_template, request, jsonify
 
 # Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
@@ -508,7 +533,19 @@ def emergency_stop_rover(reason="user disconnected"):
 MEMINFO_PATH = "/proc/meminfo"
 MEM_WARN_MB = float(os.environ.get("MEM_WARN_MB", "80"))
 MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "60"))
+# Breadcrumb tier above the shed threshold: garbage collection + 1 s polling
+# start here so a fast leak is caught before it reaches warn/critical.
+MEM_EARLY_MB = float(os.environ.get("MEM_EARLY_MB", "150"))
+WATCHDOG_TICK_SLOW = 5.0
+WATCHDOG_TICK_FAST = 1.0
+# Stop the rover this long after the operator's network link disappears.
+LINK_DOWN_STOP_SEC = float(os.environ.get("LINK_DOWN_STOP_SEC", "10"))
+WIFI_OPERSTATE_PATH = "/sys/class/net/wlan0/operstate"
+WIFI_ROUTE_PATH = "/proc/net/route"
 _mem_warned = False
+_mem_early_logged = False
+_hist_dumped = False
+_mem_history = []
 
 
 def read_meminfo(path=MEMINFO_PATH):
@@ -525,45 +562,150 @@ def read_meminfo(path=MEMINFO_PATH):
                     values[key] = float(parts[0]) / 1024.0  # kB -> MB
         if "MemAvailable" not in values:
             return None
+        swap_total = values.get("SwapTotal", 0.0)
         return {
             "mem_total_mb": values.get("MemTotal"),
             "mem_available_mb": values["MemAvailable"],
+            "swap_total_mb": swap_total,
+            "swap_used_mb": max(0.0, swap_total - values.get("SwapFree", 0.0)),
         }
     except (OSError, ValueError):
         return None
 
 
+def read_self_rss_mb():
+    """Resident set size of this process in MB (None if unreadable)."""
+    try:
+        with open("/proc/self/status", "r") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return float(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def wifi_link_state(operstate_path=WIFI_OPERSTATE_PATH, route_path=WIFI_ROUTE_PATH):
+    """Operator link health: 'up' (a default route exists — the operator can
+    still reach the rover over any interface), 'down' (no default route but a
+    Wi-Fi interface exists) or 'absent' (no interface — guard disabled)."""
+    try:
+        with open(route_path, "r") as handle:
+            handle.readline()  # header
+            for line in handle:
+                parts = line.split()
+                if len(parts) >= 4 and parts[1] == "00000000":
+                    try:
+                        if int(parts[3], 16) & 0x1:
+                            return "up"
+                    except ValueError:
+                        continue
+    except OSError:
+        return "absent"
+    if not os.path.exists(operstate_path):
+        return "absent"
+    return "down"
+
+
+def _dump_mem_history():
+    """Print recent watchdog samples so the journal shows the ramp that led
+    to a shed/critical event (previous incident logs were lost to reboot)."""
+    if not _mem_history:
+        return
+    print(f"📟 Memory history ({len(_mem_history)} samples, oldest first):")
+    for entry in _mem_history:
+        print(f"   {entry}")
+
+
 def memory_watchdog_loop():
-    """Shed load on low memory so the Pi keeps its Wi-Fi connection."""
-    global _mem_warned
+    """Shed load on low memory and stop the rover if the operator link dies.
+    Runs for manual AND systemd launches: the unit's MemoryMax/OOMScoreAdjust
+    only exist under systemd, so this in-process guard plus the startup
+    oom_score_adj raise are what protect a bare `python main.py` run."""
+    global _mem_warned, _mem_early_logged, _hist_dumped
     print("🧠 Memory watchdog started.")
+    link = wifi_link_state()
+    if link == "absent":
+        print("🔎 Wi-Fi link monitor disabled (no network interface found).")
+    link_down_since = None
+    link_down_logged = False
+    link_stop_done = False
+    tick = WATCHDOG_TICK_SLOW
     while True:
         try:
-            time.sleep(5.0)
+            time.sleep(tick)
             mem = read_meminfo()
             if mem is None:
                 continue
             avail = mem["mem_available_mb"]
+            rss = read_self_rss_mb()
+            rss_txt = f", rover RSS {rss:.0f} MB" if rss is not None else ""
+            _mem_history.append(
+                f"{time.strftime('%H:%M:%S')} avail={avail:.0f}MB "
+                f"rss={rss if rss is not None else '?'}MB "
+                f"swap={mem.get('swap_used_mb', 0.0):.0f}MB"
+            )
+            del _mem_history[:-90]
+            tick = WATCHDOG_TICK_FAST if avail < MEM_EARLY_MB else WATCHDOG_TICK_SLOW
+
+            # Early breadcrumb: start reclaiming before the shed threshold.
+            if avail < MEM_EARLY_MB and not _mem_early_logged:
+                print(f"🔎 MEMORY WATCH: {avail:.0f} MB available{rss_txt} - collecting garbage")
+                gc.collect()
+                _mem_early_logged = True
+            elif avail > MEM_EARLY_MB + 20:
+                _mem_early_logged = False
 
             # Camera is the biggest optional consumer: shed it first.  Also
             # shed again if the dashboard reconnected it while still low.
             if avail < MEM_WARN_MB and (not _mem_warned or camera_stream.clients >= 1):
-                print(f"⚠️ LOW MEMORY: {avail:.0f} MB available - shedding camera stream")
+                print(f"⚠️ LOW MEMORY: {avail:.0f} MB available{rss_txt} - shedding camera stream")
+                if not _hist_dumped:
+                    _dump_mem_history()
+                    _hist_dumped = True
                 camera_stream.stop("low memory", cooldown_sec=60.0)
                 gc.collect()
 
             # Never let the rover keep driving on a starved board.
             if (avail < MEM_CRITICAL_MB and
                     (is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn())):
-                print(f"🛑 CRITICAL MEMORY: {avail:.0f} MB available - emergency stop")
+                print(f"🛑 CRITICAL MEMORY: {avail:.0f} MB available{rss_txt} - emergency stop")
+                _dump_mem_history()
                 emergency_stop_rover(f"low memory ({avail:.0f} MB)")
                 camera_stream.stop("memory critical", cooldown_sec=120.0)
                 gc.collect()
 
             _mem_warned = avail < MEM_WARN_MB
+            if avail >= MEM_WARN_MB:
+                _hist_dumped = False
+
+            # Operator link guard: Wi-Fi death used to strand a moving rover
+            # with no kill switch (brcmfmac starves first under memory
+            # pressure).  Stop everything once the link is long gone.
+            if link != "absent":
+                now = time.monotonic()
+                if wifi_link_state() == "down":
+                    if link_down_since is None:
+                        link_down_since = now
+                    elapsed = now - link_down_since
+                    moving = is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn()
+                    if elapsed >= LINK_DOWN_STOP_SEC and not link_stop_done:
+                        if moving:
+                            print(f"📡 WI-FI LINK LOST {elapsed:.0f}s - emergency stop (operator cannot reach the rover)")
+                            emergency_stop_rover("Wi-Fi link lost")
+                            link_stop_done = True
+                        elif not link_down_logged:
+                            print(f"📡 Wi-Fi link down {elapsed:.0f}s (rover idle, waiting for recovery)")
+                            link_down_logged = True
+                elif link_down_since is not None:
+                    if now - link_down_since >= 3.0:
+                        print(f"✅ Wi-Fi link restored after {now - link_down_since:.0f}s")
+                    link_down_since = None
+                    link_down_logged = False
+                    link_stop_done = False
         except Exception as exc:
             print(f"⚠️ Memory watchdog error: {exc}")
-            time.sleep(5.0)
+            time.sleep(WATCHDOG_TICK_SLOW)
 
 
 def _atexit_stop():
