@@ -8,3 +8,4 @@ __pycache__
 # Resume: agy --conversation=8254ee39-2e05-4697-828b-1840889c1224 (or -c)
 
 old.main.py
+rover.db
