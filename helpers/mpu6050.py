@@ -29,6 +29,7 @@ class MPU6050:
         self.roll_deg = 0.0
         self.gyro_z_dps = 0.0
         self.last_update = None
+        self._i2c_errors = 0
         self._lock = threading.RLock()
 
         try:
@@ -74,7 +75,16 @@ class MPU6050:
         if not self.available:
             return self.snapshot()
         now = now or time.monotonic()
-        accel, gyro = self._raw()
+        try:
+            accel, gyro = self._raw()
+        except Exception as exc:
+            # Transient I2C glitches are common while the motors run: keep the
+            # last good attitude instead of raising into the navigation loop.
+            self._i2c_errors += 1
+            if self._i2c_errors in (1, 50):
+                print(f"⚠️ MPU6050 I2C read failed ({exc}) - reusing last attitude")
+            return self.snapshot()
+        self._i2c_errors = 0
         with self._lock:
             if self.last_update is not None:
                 dt = min(0.1, max(0.0, now - self.last_update))

@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 
 try:
     import serial
@@ -83,7 +84,11 @@ class GPS:
                     self.speed_kmh = (msg.spd_over_grnd or 0) * 1.852
                     if msg.true_course is not None:
                         self.course_deg = float(msg.true_course)
-            except (pynmea2.ParseError, serial.SerialException, ValueError, AttributeError):
+            except (pynmea2.ParseError, serial.SerialException, ValueError, AttributeError, OSError):
+                # Never busy-spin (e.g. the serial port died) and never let the
+                # reader thread die: a dead thread would leave a stale GPS fix
+                # feeding the navigation loop forever.
+                time.sleep(0.2)
                 continue
 
     def get(self):
