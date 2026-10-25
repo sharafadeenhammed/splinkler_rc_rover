@@ -56,7 +56,7 @@ from helpers import (
     forward, reverse, turnRight, turnLeft, stop,
     readHumidityAndTemp, camera_servo, sensor_servo,
     MOISTURE_SENSOR, WATER_PUMP,
-    get_distance_cm, set_latest_frame, get_vision_status,
+    get_distance_cm, set_latest_frame, get_vision_status, analyze_visual_edges,
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed,
@@ -65,6 +65,10 @@ from helpers import (
 )
 from helpers.mpu6050 import (
     get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading, set_imu_heading_rad,
+    apply_heading_correction,
+)
+from helpers.hmc5883l import (
+    get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
 from helpers.pose_fusion import gps_heading_usable
 from helpers.gps_controller import get_gps
@@ -118,7 +122,13 @@ def navigation_loop():
   print("🧭 Navigation loop started.")
   while True:
     try:
+      compass = update_compass()
       imu = update_imu()
+      if compass.get("available") and imu.get("available"):
+        correction = compass_drift_correction(imu["heading_rad"])
+        if correction:
+          apply_heading_correction(correction)
+          imu = get_imu_snapshot()
       left_ticks, right_ticks = get_encoder_ticks()
       pose_tracker.update(
           left_ticks, right_ticks, imu,
@@ -165,6 +175,7 @@ class SharedCameraStream:
         self.frame = None  # Keep only the latest JPEG in RAM.
         self.last_client_at = time.monotonic()
         self.blocked_until = 0.0  # memory watchdog cooldown (monotonic)
+        self.vision_pinned = False  # obstruction vision keeps capture alive
 
     def subscribe(self):
         with self.lock:
@@ -184,6 +195,16 @@ class SharedCameraStream:
             self.last_client_at = time.monotonic()
             self.condition.notify_all()
 
+    def ensure_for_vision(self):
+        """Keep camera capture running for obstruction analysis even when no
+        dashboard client is watching the stream."""
+        with self.condition:
+            if time.monotonic() < self.blocked_until:
+                return  # memory watchdog cooldown: stay off until it expires
+            self.vision_pinned = True
+            if self.process is None:
+                self._start_locked()
+
     def stop(self, reason="idle", cooldown_sec=0.0):
         """Kill the camera process now (memory pressure) and optionally refuse
         to restart for cooldown_sec — the dashboard retries /stream on a timer,
@@ -191,6 +212,9 @@ class SharedCameraStream:
         with self.condition:
             self.clients = 0
             self.last_client_at = 0.0  # reader thread sees idle immediately
+            # Vision must not fight the watchdog: it re-pins itself once the
+            # cooldown expires (see ensure_for_vision).
+            self.vision_pinned = False
             if cooldown_sec:
                 self.blocked_until = time.monotonic() + cooldown_sec
             print(f"📷 Camera stopped ({reason}).")
@@ -218,7 +242,8 @@ class SharedCameraStream:
         try:
             while process.poll() is None:
                 with self.lock:
-                    idle = self.clients == 0 and time.monotonic() - self.last_client_at > 5.0
+                    idle = (not self.vision_pinned and self.clients == 0
+                            and time.monotonic() - self.last_client_at > 5.0)
                 if idle:
                     break
                 ready, _, _ = select.select([process.stdout], [], [], 0.5)
@@ -451,6 +476,7 @@ def get_telemetry_payload():
     payload["encoder_right"] = rt
     payload["encoder_config"] = encoder_config()
     payload["imu"] = get_imu_snapshot()
+    payload["compass"] = get_compass_snapshot()
     payload["pose"] = pose_tracker.snapshot()
     payload["active_area"] = cached_active_area()
     payload["map_origin"] = _map_origin_cache["value"]
@@ -477,6 +503,7 @@ def apply_navigation_origin(latitude, longitude, source="manual"):
         heading_rad = 0.0
     pose_tracker.reset(0.0, 0.0, heading_rad)
     set_imu_heading_rad(heading_rad)
+    reset_compass_fusion()
     return {
         "map_origin": [latitude, longitude],
         "source": source,
@@ -752,6 +779,25 @@ def ws_telemetry_broadcast_loop():
             broadcast_telemetry()
         except Exception as e:
             time.sleep(1.0)
+
+# Runs camera capture + 1 Hz obstruction analysis from service startup, so
+# obstacle vision works even when the dashboard is opened with video off (or
+# not opened at all — e.g. the rover is started from the Bluetooth agent).
+def vision_loop():
+    print("👁️ Camera obstruction loop started.")
+    last_analysis = 0.0
+    while True:
+        try:
+            camera_stream.ensure_for_vision()
+            now = time.monotonic()
+            if now - last_analysis >= 1.0:
+                analyze_visual_edges()  # refreshes vision_status
+                last_analysis = now
+            time.sleep(1.0)
+        except Exception as exc:
+            print(f"⚠️ Vision loop error: {exc}")
+            time.sleep(2.0)
+
 
 # Mount background tasks on server start.  The lock prevents duplicate loops
 # when the dashboard fires several first requests at once (page + /stream +
@@ -1060,7 +1106,8 @@ def calibrate_imu_endpoint():
         return jsonify({"success": False, "error": "Stop the rover before calibrating the MPU6050"}), 409
     ok = calibrate_imu()
     reset_imu_heading()
-    return jsonify({"success": ok, "imu": get_imu_snapshot()}), (200 if ok else 503)
+    reset_compass_fusion()
+    return jsonify({"success": ok, "imu": get_imu_snapshot(), "compass": get_compass_snapshot()}), (200 if ok else 503)
 
 
 @app.route('/api/telemetry', methods=['GET'])
@@ -1080,6 +1127,14 @@ if __name__ == '__main__':
     # deploy/emergency_stop.py as the backstop.
     atexit.register(_atexit_stop)
     signal.signal(signal.SIGTERM, _sigterm_handler)
+    # Obstruction vision (and the watchdog that can shed it under memory
+    # pressure) must not wait for the first HTTP request: the rover can be
+    # started from the Bluetooth agent with no dashboard open at all.
+    with _threads_lock:
+        if not getattr(app, 'memory_watchdog_started', False):
+            threading.Thread(target=memory_watchdog_loop, daemon=True).start()
+            app.memory_watchdog_started = True
+    threading.Thread(target=vision_loop, daemon=True).start()
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
     # threaded=True allows multiple backend connections without blocking
     # debug=False: debug mode adds overhead and exposes the Werkzeug debugger to the network
