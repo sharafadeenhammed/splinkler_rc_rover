@@ -41,37 +41,3 @@ class PINOUT:
 
 
 __all__ = ["PINOUT"]
-
-
-# PINOUT = {
-#   "PIN3": 2, # ALSO SDA PIN FOR I2C.
-#   "PIN5": 3, # ALSO SCL PIN FOR I2C.
-#   "SDA": 2,  # SDA PIN FOR I2C.
-#   "SCL": 3,  # SCL PIN FOR I2C.
-#   "PIN7": 4,
-#   "PIN8": 14,
-#   "PIN10": 15,
-#   "PIN11": 17,
-#   "PIN12": 18,
-#   "PIN13": 27,
-#   "PIN15": 22,
-#   "PIN16": 23,
-#   "PIN18": 24,
-#   "PIN19": 10,
-#   "PIN21": 9,
-#   "PIN22": 25,
-#   "PIN23": 11,
-#   "PIN24": 8,
-#   "PIN26": 7,
-#   "PIN29": 5,
-#   "PIN31": 6,
-#   "PIN32": 12,
-#   "PIN33": 13,
-#   "PIN35": 19,
-#   "PIN36": 16,
-#   "PIN37": 26,
-#   "PIN38": 20,
-#   "PIN40": 21,
-# }
-
-# __all__ = ["PINOUT"]

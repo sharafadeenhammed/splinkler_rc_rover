@@ -36,11 +36,45 @@ const gpsText = document.getElementById("gpsText");
 const videoFeed = document.getElementById("videoFeed");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
+const valVision = document.getElementById("valVision");
+const valMag = document.getElementById("valMag");
+const pinInput = document.getElementById("roverPinInput");
 
 // Dynamic base URLs
 const baseURL = window.location.origin;
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 const wsURL = `${wsProtocol}//${window.location.host}/ws`;
+
+// Command PIN: the field appears in the sidebar only when the server
+// enforces one (telemetry pin_required), and the value persists locally.
+let roverPin = localStorage.getItem("roverPin") || "";
+if (pinInput) {
+  pinInput.value = roverPin;
+  pinInput.addEventListener("input", () => {
+    roverPin = pinInput.value.trim();
+    localStorage.setItem("roverPin", roverPin);
+  });
+}
+
+function pinHeaders() {
+  return roverPin ? { "X-Rover-Pin": roverPin } : {};
+}
+
+function roverFetch(url, opts = {}) {
+  // Adds the PIN header and turns a 401 into a friendly, handled response
+  // instead of a silently dead button (handlers surface data.error as a toast).
+  return fetch(url, { ...opts, headers: { ...pinHeaders(), ...(opts.headers || {}) } }).then((res) => {
+    if (res.status === 401) {
+      if (pinInput) pinInput.focus();
+      return {
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ success: false, error: "PIN required — set it in the sidebar" }),
+      };
+    }
+    return res;
+  });
+}
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
@@ -237,6 +271,7 @@ function scheduleReconnect() {
 function sendWSCommand(payload) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
+      if (roverPin) payload.pin = roverPin;
       ws.send(JSON.stringify(payload));
       return true;
     } catch (e) {
@@ -288,6 +323,26 @@ function renderTelemetry(data) {
   if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : '0';
   if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : '0';
 
+  if (data.vision_status !== undefined && valVision) {
+    const label = data.vision_status === "CLEAR"
+      ? "CLEAR"
+      : (data.vision_status === "OBSTACLE_LEFT" ? "OBST \u25c0" : "OBST \u25b6");
+    valVision.innerText = label;
+    valVision.classList.toggle("alert", data.vision_status !== "CLEAR");
+  }
+  if (data.compass && valMag) {
+    if (data.compass.available) {
+      valMag.innerText = `${(data.compass.heading_deg || 0).toFixed(0)}\u00b0`;
+      valMag.classList.toggle("fused", !!data.compass.fusion_active);
+    } else {
+      valMag.innerText = "--";
+      valMag.classList.remove("fused");
+    }
+  }
+  if (pinInput && data.pin_required !== undefined) {
+    pinInput.hidden = !data.pin_required;
+  }
+
   if (sensorReadings) {
     sensorReadings.innerHTML = `
       <p>Temp: ${data.temperature}°C</p>
@@ -325,6 +380,23 @@ function renderTelemetry(data) {
       loadedOrigin = true;
       originSetForWork = true;
       mapViewBootstrapped = true;
+    }
+  }
+
+  if (data.imu) {
+    const pitch = data.imu.pitch_deg || 0;
+    const roll = data.imu.roll_deg || 0;
+    const yaw = data.imu.heading_deg || 0;
+    const pitchEl = document.getElementById("valPitch");
+    const rollEl = document.getElementById("valRoll");
+    const yawEl = document.getElementById("valYaw");
+    if (pitchEl) pitchEl.innerText = pitch.toFixed(1);
+    if (rollEl) rollEl.innerText = roll.toFixed(1);
+    if (yawEl) yawEl.innerText = yaw.toFixed(1);
+    const model = document.getElementById("rover3dModel");
+    if (model) {
+      // CSS 3D transform mapping
+      model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg) rotateZ(${-yaw}deg)`;
     }
   }
 }
@@ -638,7 +710,7 @@ function sendHardwareCommand(speed, direction) {
   const sent = sendWSCommand(payload);
 
   if (!sent) {
-    fetch(`${baseURL}/motor?speed=${speed}&dir=${direction}`)
+    roverFetch(`${baseURL}/motor?speed=${speed}&dir=${direction}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success && statusTxt) statusTxt.innerText = data.status;
@@ -650,7 +722,7 @@ function sendHardwareCommand(speed, direction) {
 function toggleSensorDeploy(action = "toggle") {
   const sent = sendWSCommand({ type: "sensor_deploy", action: action });
   if (!sent) {
-    fetch(`${baseURL}/deploy_sensor?action=${action}`)
+    roverFetch(`${baseURL}/deploy_sensor?action=${action}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -665,7 +737,7 @@ function toggleSensorDeploy(action = "toggle") {
 function toggleWaterPump(action = "toggle") {
   const sent = sendWSCommand({ type: "pump", action: action });
   if (!sent) {
-    fetch(`${baseURL}/water_pump?action=${action}`)
+    roverFetch(`${baseURL}/water_pump?action=${action}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -680,7 +752,7 @@ function toggleWaterPump(action = "toggle") {
 function toggleAutoMode(action = "toggle") {
   const sent = sendWSCommand({ type: "auto_mode", action: action });
   if (!sent) {
-    fetch(`${baseURL}/auto_mode?action=${action}`)
+    roverFetch(`${baseURL}/auto_mode?action=${action}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -695,7 +767,7 @@ function toggleAutoMode(action = "toggle") {
 function tiltCamera(direction) {
   const sent = sendWSCommand({ type: "camera_tilt", direction: direction });
   if (!sent) {
-    fetch(`${baseURL}/camera_tilt?direction=${direction}`)
+    roverFetch(`${baseURL}/camera_tilt?direction=${direction}`)
       .then((res) => res.json())
       .then((data) => {
         const angleElem = document.getElementById("current-angle");
@@ -714,7 +786,7 @@ function updateAutoSpeed() {
   if (autoSpeedVal) autoSpeedVal.innerText = speed;
   const sent = sendWSCommand({ type: "auto_speed", speed_pct: speed });
   if (!sent) {
-    fetch(`${baseURL}/auto_speed?speed_pct=${speed}`)
+    roverFetch(`${baseURL}/auto_speed?speed_pct=${speed}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) showToast(`Auto speed set to ${speed}%`);
@@ -893,29 +965,4 @@ window.addEventListener("beforeunload", () => {
 
 // Initialize WebSocket on page load
 initWebSocket();
-
-// Injecting 3D orientation update logic into renderTelemetry dynamically
-const originalRenderTelemetry = renderTelemetry;
-renderTelemetry = function(data) {
-  originalRenderTelemetry(data);
-  if (data.imu) {
-    const pitch = data.imu.pitch_deg || 0;
-    const roll = data.imu.roll_deg || 0;
-    const yaw = data.imu.heading_deg || 0;
-    
-    const valPitch = document.getElementById("valPitch");
-    const valRoll = document.getElementById("valRoll");
-    const valYaw = document.getElementById("valYaw");
-    
-    if (valPitch) valPitch.innerText = pitch.toFixed(1);
-    if (valRoll) valRoll.innerText = roll.toFixed(1);
-    if (valYaw) valYaw.innerText = yaw.toFixed(1);
-    
-    const model = document.getElementById("rover3dModel");
-    if (model) {
-      // CSS 3D transform mapping
-      model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg) rotateZ(${-yaw}deg)`;
-    }
-  }
-};
 

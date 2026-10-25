@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="/static/vendor/leaflet.css">
   <link rel="stylesheet" href="/static/index.css">
 </head>
 <body>
@@ -20,7 +20,7 @@
       <nav class="side-nav"><a class="nav-link active" href="#overview"><span>▦</span> Console</a><a class="nav-link" href="#navigation"><span>⌖</span> Map</a><a class="nav-link" href="#sensors"><span>◌</span> Sensors</a></nav>
       <div class="sidebar-label">Actions</div>
       <button class="side-action" onclick="setRoverStart()"><span>⊙</span> Origin at rover</button><button class="side-action" onclick="openModal('imuModal')"><span>◉</span> Calibrate IMU</button>
-      <div class="sidebar-foot"><div class="system-mini"><i></i><span id="wsStatusTxt" class="connecting">CONNECTING</span></div></div>
+      <div class="sidebar-foot"><div class="system-mini"><i></i><span id="wsStatusTxt" class="connecting">CONNECTING</span></div><input type="password" id="roverPinInput" class="pin-input" placeholder="Command PIN" inputmode="numeric" autocomplete="off" hidden></div>
     </aside>
 
     <div class="app-content">
@@ -58,6 +58,7 @@
               <div class="o-stat"><small>PITCH</small><strong><span id="valPitch">0</span>&deg;</strong></div>
               <div class="o-stat"><small>ROLL</small><strong><span id="valRoll">0</span>&deg;</strong></div>
               <div class="o-stat"><small>YAW</small><strong><span id="valYaw">0</span>&deg;</strong></div>
+              <div class="o-stat"><small>MAG</small><strong id="valMag">--</strong></div>
             </div>
           </div>
           <div class="drive-pad drive-pad--dock">
@@ -68,14 +69,14 @@
             <button type="button" class="drive-key down" id="reverseBtn" aria-label="Reverse">▼</button>
           </div>
         </section>
-        <section class="bottom-dock" id="sensors"><div class="sensor-strip"><div><small>TEMP</small><strong id="valTemp">--</strong></div><div><small>HUMIDITY</small><strong id="valHumidity">--</strong></div><div><small>SOIL</small><strong id="valSoil">Dry</strong></div><div><small>OBSTACLE</small><strong id="valDist">-- cm</strong></div><div><small>LEFT TICKS</small><strong id="valEncLeft">0</strong></div><div><small>RIGHT TICKS</small><strong id="valEncRight">0</strong></div><span id="autoProgressText">IDLE</span><div class="dock-progress"><i id="autoProgressFill"></i></div><strong id="missionPercent">0%</strong></div><div class="dock-controls"><label>Auto speed <b><span id="autoSpeedVal">70</span>%</b><input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()"></label><button class="equipment-mini" id="sensorDeployBtn" onclick="toggleSensorDeploy()">Probe <span id="sensorStatus">RETRACTED</span></button><button class="equipment-mini" id="pumpToggleBtn" onclick="toggleWaterPump()">Pump <span id="pumpStatus">OFF</span></button><button class="equipment-mini" onclick="openModal('imuModal')">Calibrate IMU</button></div><div id="sensorReadings" hidden></div></section>
+        <section class="bottom-dock" id="sensors"><div class="sensor-strip"><div><small>TEMP</small><strong id="valTemp">--</strong></div><div><small>HUMIDITY</small><strong id="valHumidity">--</strong></div><div><small>SOIL</small><strong id="valSoil">Dry</strong></div><div><small>OBSTACLE</small><strong id="valDist">-- cm</strong></div><div><small>VISION</small><strong id="valVision">CLEAR</strong></div><div><small>LEFT TICKS</small><strong id="valEncLeft">0</strong></div><div><small>RIGHT TICKS</small><strong id="valEncRight">0</strong></div><span id="autoProgressText">IDLE</span><div class="dock-progress"><i id="autoProgressFill"></i></div><strong id="missionPercent">0%</strong></div><div class="dock-controls"><label>Auto speed <b><span id="autoSpeedVal">70</span>%</b><input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()"></label><button class="equipment-mini" id="sensorDeployBtn" onclick="toggleSensorDeploy()">Probe <span id="sensorStatus">RETRACTED</span></button><button class="equipment-mini" id="pumpToggleBtn" onclick="toggleWaterPump()">Pump <span id="pumpStatus">OFF</span></button><button class="equipment-mini" onclick="openModal('imuModal')">Calibrate IMU</button></div><div id="sensorReadings" hidden></div></section>
       </main>
     </div>
   </div>
 
   <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')"><div class="modal small-modal"><button class="modal-close" onclick="closeModal('imuModal')">×</button><span class="panel-kicker">INERTIAL SENSOR</span><h2>Calibrate MPU6050</h2><p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p><div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button><button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button></div></div></div>
   <div class="toast" id="toast"></div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/static/vendor/leaflet.js"></script>
   <script src="/static/index.js"></script>
 </body>
 </html>

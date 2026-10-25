@@ -8,7 +8,9 @@ import json
 import select
 import math
 import atexit
+import functools
 import gc
+import hmac
 
 # Line-buffer stdout: under systemd stdout is a journald socket and print()
 # output stays block-buffered for hours, hiding the memory watchdog's alerts
@@ -77,6 +79,31 @@ from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_W
 
 app = Flask(__name__)
 sock = Sock(app) if HAS_SOCK else None
+
+# Optional command PIN: when ROVER_PIN is set in the service environment, the
+# six control endpoints (drive, auto, probe, pump, camera pan, auto speed)
+# and their WebSocket equivalents demand it; an empty value keeps the old
+# open behaviour.  The dashboard reads pin_required from telemetry and shows
+# the PIN field only when it is enforced.
+ROVER_PIN = os.environ.get("ROVER_PIN", "").strip()
+_PROTECTED_WS_COMMANDS = {"motor", "sensor_deploy", "pump", "auto_mode", "auto_speed", "camera_tilt"}
+
+
+def _pin_ok(supplied=None):
+    if not ROVER_PIN:
+        return True
+    if supplied is None:  # HTTP route: header first, query param as fallback
+        supplied = request.headers.get("X-Rover-Pin", "") or request.args.get("pin", "")
+    return hmac.compare_digest(str(supplied).strip(), ROVER_PIN)
+
+
+def pin_required(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _pin_ok():
+            return jsonify({"success": False, "error": "PIN required"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
 
 camera_current_angle = 0
 sensor_servo_deployed = False
@@ -482,6 +509,7 @@ def get_telemetry_payload():
     payload["map_origin"] = _map_origin_cache["value"]
     payload["gps"] = get_gps().get()
     payload["memory"] = read_meminfo()
+    payload["pin_required"] = bool(ROVER_PIN)
     payload["success"] = True
     return payload
 
@@ -783,7 +811,16 @@ def ws_telemetry_broadcast_loop():
 # Runs camera capture + 1 Hz obstruction analysis from service startup, so
 # obstacle vision works even when the dashboard is opened with video off (or
 # not opened at all — e.g. the rover is started from the Bluetooth agent).
+# VISION_LOOP_ENABLED=0 keeps the camera fully off at startup (the dashboard
+# video button can still start it) — useful to A/B-test camera-correlated
+# power issues.
+VISION_LOOP_ENABLED = os.environ.get("VISION_LOOP_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+
+
 def vision_loop():
+    if not VISION_LOOP_ENABLED:
+        print("👁️ Camera obstruction loop disabled (VISION_LOOP_ENABLED=0).")
+        return
     print("👁️ Camera obstruction loop started.")
     last_analysis = 0.0
     while True:
@@ -799,13 +836,12 @@ def vision_loop():
             time.sleep(2.0)
 
 
-# Mount background tasks on server start.  The lock prevents duplicate loops
-# when the dashboard fires several first requests at once (page + /stream +
-# telemetry + WS connect), which would waste CPU and memory on this board.
+# Background loops start exactly once, at module import — covering both
+# `python main.py` and a WSGI server (gunicorn imports main:app without ever
+# running __main__), so obstruction vision needs no HTTP request to exist.
 _threads_lock = threading.Lock()
 
-@app.before_request
-def initialize_background_threads():
+def start_background_threads():
     with _threads_lock:
         if not getattr(app, 'sensor_thread_started', False):
             bg_thread = threading.Thread(target=read_sensor_loop, daemon=True)
@@ -822,10 +858,28 @@ def initialize_background_threads():
             mem_thread.start()
             app.memory_watchdog_started = True
 
+        # Obstruction vision shares the fate of the watchdog that can shed it
+        # under memory pressure: both start with the service, neither waits
+        # for a dashboard request (the rover may run from the BT agent alone).
+        if not getattr(app, 'vision_loop_started', False):
+            threading.Thread(target=vision_loop, daemon=True).start()
+            app.vision_loop_started = True
+
         if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
             ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
             ws_thread.start()
             app.ws_broadcast_started = True
+
+
+@app.after_request
+def set_static_cache_headers(response):
+    """Cache static assets for a day: over the rover's flaky Wi-Fi the
+    dashboard was re-downloading css/js on every single page load."""
+    if request.path.startswith("/static/"):
+        # Overwrite (not setdefault): Flask's default is `no-cache`, which
+        # would otherwise win and keep the css/js re-downloading every load.
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
 
 # WebSocket Endpoint
 if HAS_SOCK:
@@ -884,6 +938,13 @@ if HAS_SOCK:
                     data = json.loads(msg) if isinstance(msg, str) else json.loads(msg.decode('utf-8'))
                     cmd_type = data.get("type")
                     response = {"type": "response", "success": True, "command": cmd_type}
+
+                    if cmd_type in _PROTECTED_WS_COMMANDS and not _pin_ok(data.get("pin")):
+                        response["success"] = False
+                        response["error"] = "PIN required"
+                        response["message"] = "PIN required — set it in the sidebar"
+                        client.send(json.dumps(response))
+                        continue
 
                     if cmd_type == "motor":
                         speed = data.get("speed", 0)
@@ -962,6 +1023,7 @@ def home():
     return render_template("index.html")
 
 @app.route('/motor', methods=['GET'])
+@pin_required
 def control_motor():
     try:
         speed = request.args.get('speed', 0)
@@ -984,6 +1046,7 @@ def control_ultrasonic():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/auto_mode', methods=['GET', 'POST'])
+@pin_required
 def control_auto_mode():
     action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
     res = handle_auto_mode(action)
@@ -991,6 +1054,7 @@ def control_auto_mode():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/deploy_sensor', methods=['GET', 'POST'])
+@pin_required
 def deploy_sensor():
     action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
     res = handle_sensor_deploy(action)
@@ -998,6 +1062,7 @@ def deploy_sensor():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/water_pump', methods=['GET', 'POST'])
+@pin_required
 def control_pump():
     action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
     res = handle_water_pump(action)
@@ -1005,6 +1070,7 @@ def control_pump():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/camera_tilt', methods=['GET'])
+@pin_required
 def tilt_camera():
     direction = request.args.get('direction')
     if not direction:
@@ -1017,6 +1083,7 @@ def tilt_camera():
     return jsonify({"status": "success", "current_angle": angle})
 
 @app.route('/auto_speed', methods=['GET', 'POST'])
+@pin_required
 def set_auto_speed_endpoint():
     speed_pct = (request.args.get('speed_pct') or
                  (request.json.get('speed_pct') if request.is_json else None) or 70)
@@ -1121,20 +1188,17 @@ def navigation_history():
 def navigation_runs():
     return jsonify({"success": True, "runs": DB.recent_runs()}), 200
 
+# Orderly motor/pump stop on every exit path: atexit covers `python main.py`
+# and gunicorn's graceful worker stop; if the process is SIGKILLed instead,
+# deploy/rover.service's ExecStopPost runs deploy/emergency_stop.py.
+atexit.register(_atexit_stop)
+start_background_threads()
+
 if __name__ == '__main__':
-    # Cut motors/pump on any orderly exit.  If the OOM killer SIGKILLs this
-    # process instead, deploy/rover.service's ExecStopPost runs
-    # deploy/emergency_stop.py as the backstop.
-    atexit.register(_atexit_stop)
+    # Manual/dev run via Werkzeug.  Production uses gunicorn (see
+    # deploy/gunicorn.conf.py), which never executes this block — its worker
+    # runs the atexit handlers above on graceful stop instead.
     signal.signal(signal.SIGTERM, _sigterm_handler)
-    # Obstruction vision (and the watchdog that can shed it under memory
-    # pressure) must not wait for the first HTTP request: the rover can be
-    # started from the Bluetooth agent with no dashboard open at all.
-    with _threads_lock:
-        if not getattr(app, 'memory_watchdog_started', False):
-            threading.Thread(target=memory_watchdog_loop, daemon=True).start()
-            app.memory_watchdog_started = True
-    threading.Thread(target=vision_loop, daemon=True).start()
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
     # threaded=True allows multiple backend connections without blocking
     # debug=False: debug mode adds overhead and exposes the Werkzeug debugger to the network
