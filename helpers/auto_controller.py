@@ -26,7 +26,6 @@ from helpers.motor_controls      import forward, reverse, turnRight, turnLeft, s
 from helpers.servo_controller    import sensor_servo
 from helpers.moisture_controller import MOISTURE_SENSOR
 from helpers.pump_controller     import WATER_PUMP
-from helpers.vision_controller   import analyze_visual_edges, ensure_opencv_loaded
 from helpers.ultrasonic_controller import get_distance_cm
 from helpers.encoder_controller  import (
     get_encoder_ticks, reset_encoders, LEFT_ENCODER, RIGHT_ENCODER,
@@ -81,12 +80,24 @@ PID_KI = 0.0001  # integral gain:     correct persistent slight bias
 PID_KD = 0.002   # derivative gain:   dampen oscillations
 IMU_HEADING_KP = 0.35  # duty-cycle correction per radian of heading drift
 
-# ─── Obstacle avoidance ───────────────────────────────────────────────────────
+# ─── Obstacle avoidance (ultrasonic only — the camera vision pipeline was
+# removed: it was the biggest CPU/memory consumer and correlated with the
+# board's power collapses) ────────────────────────────────────────────────────
 OBSTACLE_THRESHOLD_CM   = 20.0
+# A single ultrasonic sample can glitch (stale async reading, stray echo);
+# require this many consecutive short readings before acting on an obstacle.
+# Pivot turns are expensive to make on a phantom.
+OBSTACLE_CONFIRM_READINGS = 2
 use_ultrasonic_in_auto  = True
+_obstacle_hits = 0
+# Alternating evasive direction so repeated obstacles cannot trap the rover
+# in a one-sided turn loop.
+_evasion_side = "left"
 
 # ─── Soil / watering ──────────────────────────────────────────────────────────
-WATERING_DURATION_SEC   = 3.0
+# When the probe reads DRY the pump starts AND the rover keeps moving, so the
+# water wets the ground along the rover's path instead of pooling in one spot.
+WATERING_RUN_M          = 1.0   # metres driven during one dry-soil watering run
 SOIL_CHECK_INTERVAL_M   = 1.5   # check soil every 1.5 metres of forward travel
 
 
@@ -434,13 +445,22 @@ def _drive_distance(metres: float, check_fn=None) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _obstacle_check() -> bool:
-    """Return True if an obstacle is detected (ultrasonic or vision)."""
-    if use_ultrasonic_in_auto:
-        dist = get_distance_cm()
-        if dist is not None and 0 < dist <= OBSTACLE_THRESHOLD_CM:
-            return True
-    vis_state, _, _ = analyze_visual_edges()
-    return vis_state != "CLEAR"
+    """True when the ultrasonic reports a barrier ahead (debounced).
+
+    Camera vision was removed, so the ultrasonic is now the only obstacle
+    sense.  A fresh read happens on every call, so one clear reading resets
+    the counter immediately.
+    """
+    global _obstacle_hits
+    if not use_ultrasonic_in_auto:
+        _obstacle_hits = 0
+        return False
+    dist = get_distance_cm()
+    if dist is not None and 0 < dist <= OBSTACLE_THRESHOLD_CM:
+        _obstacle_hits += 1
+    else:
+        _obstacle_hits = 0
+    return _obstacle_hits >= OBSTACLE_CONFIRM_READINGS
 
 
 def _evade_obstacle():
@@ -469,22 +489,75 @@ def _evade_obstacle():
 
     time.sleep(0.1)
 
-    # Choose turn direction from vision
-    vis_state, _, _ = analyze_visual_edges()
-    if vis_state == "OBSTACLE_LEFT":
-        print("↪️  Turning RIGHT to avoid left obstacle.")
-        _pivot_90(clockwise=True)
-    else:
-        print("↩️  Turning LEFT to avoid right obstacle.")
-        _pivot_90(clockwise=False)
+    # Pick a side (alternating between evasions — no vision to tell us which
+    # way is clearer), verify the chosen way is actually open, then drive
+    # past the obstacle.
+    clockwise = _evasion_side == "right"
+    _evasion_side = "right" if _evasion_side == "left" else "left"
+    print("↪️  Turning RIGHT to evade." if clockwise else "↩️  Turning LEFT to evade.")
+    _pivot_90(clockwise=clockwise)
+    final_turn_clockwise = clockwise
+    if _obstacle_check():
+        print("↩️  Chosen side blocked – swinging 180°.")
+        _pivot_90(clockwise=not clockwise)
+        _pivot_90(clockwise=not clockwise)
+        final_turn_clockwise = not clockwise
 
-    # Drive forward past the obstacle
+    # Drive forward past the obstacle, then undo the evasion turn so the
+    # rover resumes the strip heading it had before: the boustrophedon sweep
+    # depends on its passes staying strictly 180° apart.
     _drive_distance(ROVER_LENGTH_M * 0.8)
+    _pivot_90(clockwise=not final_turn_clockwise)
     time.sleep(0.15)
 
 
-def _check_and_water():
-    """Deploy sensor probe, read moisture, pump if dry, retract."""
+def _water_while_moving(distance_m: float) -> float:
+    """Pump ON while driving forward so the water wets the ground along the
+    rover's path instead of pooling at one spot.
+
+    Returns the metres actually covered.  The pump is cut on every exit path
+    (obstacle, stall, auto-mode stop, exception) so it can never be left
+    running behind an error.
+    """
+    global _obstacle_hits
+    remaining = distance_m
+    covered_total = 0.0
+    stalls = 0
+    WATER_PUMP.turnOnPump()
+    try:
+        while remaining > 0.05 and auto_mode_active:
+            covered = _drive_straight(min(remaining, 0.4), check_obstacle=True)
+            remaining -= covered
+            covered_total += covered
+            if not auto_mode_active:
+                break
+            if _obstacle_check():
+                WATER_PUMP.turnOffPump()       # never spray a wall
+                _obstacle_hits = 0
+                _evade_obstacle()
+                if auto_mode_active:
+                    WATER_PUMP.turnOnPump()
+                stalls = 0
+            elif covered <= 0.02:
+                stalls += 1
+                if stalls >= 2:
+                    print("⚠️ Watering run stalled – stopping pump, resuming sweep.")
+                    break
+            else:
+                stalls = 0
+            time.sleep(0.05)
+    finally:
+        WATER_PUMP.turnOffPump()
+    return covered_total
+
+
+def _check_and_water() -> float:
+    """Deploy the soil probe and read moisture.  When DRY, start the pump
+    and drive the next stretch so the water spreads along the rover path.
+
+    Returns the metres advanced during the watering run, so the caller can
+    fold it back into the strip accounting.
+    """
     print("🌱 Halting for soil moisture check...")
     auto_progress["phase"] = "checking_soil"
     stop()
@@ -497,22 +570,22 @@ def _check_and_water():
     soil_state = MOISTURE_SENSOR.getSoilMoistureState()
     print(f"🌱 Soil: {soil_state}")
 
+    watered_m = 0.0
     if str(soil_state).strip().lower() == "dry":
         auto_progress["phase"] = "watering"
-        print(f"💧 DRY – pumping for {WATERING_DURATION_SEC} s...")
-        WATER_PUMP.turnOnPump()
-        pump_start = time.time()
-        while (time.time() - pump_start < WATERING_DURATION_SEC) and auto_mode_active:
-            time.sleep(0.1)
-        WATER_PUMP.turnOffPump()
-        print("💧 Watering done.")
-        time.sleep(0.3)
+        print(f"💧 DRY – pumping while advancing {WATERING_RUN_M:.1f} m...")
+        sensor_servo.angle = -90     # retract the probe before moving
+        time.sleep(0.8)
+        watered_m = _water_while_moving(WATERING_RUN_M)
+        print(f"💧 Watering run done ({watered_m:.2f} m).")
     else:
         print("✅ Soil WET – skipping pump.")
         WATER_PUMP.turnOffPump()
 
-    sensor_servo.angle = -90     # retract probe
+    sensor_servo.angle = -90     # retract probe (no-op if already home)
     time.sleep(0.8)
+    auto_progress["phase"] = "driving"
+    return watered_m
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,8 +597,8 @@ def autonomous_routine():
     Lawnmower-pattern area coverage with:
       • Encoder-based PID straight-line driving
       • Encoder-based precise 90° turns
-      • Distance-based soil moisture checks
-      • Ultrasonic + camera obstacle avoidance
+      • Distance-based soil moisture checks (pump-on-while-driving when dry)
+      • Debounced ultrasonic obstacle avoidance with heading re-alignment
 
         ┌──────────────────────── AREA_WIDTH_M ───────────────────────┐
         │  →→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→→  strip 0       │
@@ -542,11 +615,6 @@ def autonomous_routine():
     auto_progress["strip"]        = 0
     auto_progress["phase"]        = "driving"
     auto_progress["coverage_pct"] = 0.0
-
-    # Load OpenCV now, while the rover is still stationary, so the first
-    # obstacle check does not block mid-drive (memory-friendly: this is the
-    # only code path that ever loads it).
-    ensure_opencv_loaded(timeout=15.0)
 
     enc_status = "ENCODERS ✅" if _has_encoders() else "TIME-BASED ⏱️ (no encoders)"
     print(f"🤖 Autonomous sweep START  –  area {AREA_WIDTH_M:.1f} m × {AREA_HEIGHT_M:.1f} m,  "
@@ -568,6 +636,8 @@ def autonomous_routine():
         segment_width, _segment_y = coverage_segments[strip]
         remaining_m = segment_width
         distance_since_soil_check = 0.0
+        stalls = 0
+        stall_backoffs = 0
 
         while auto_mode_active and remaining_m > 0.01:
             # Decide how far to drive before next soil check
@@ -590,10 +660,34 @@ def autonomous_routine():
                 auto_progress["phase"] = "driving"
                 continue
 
-            # Soil check due?
+            # Progress guard: repeated zero-progress stretches with a clear
+            # path ahead mean the wheels are not turning (wedged or a motor
+            # gave up).  Back off and retry; give up cleanly rather than
+            # spinning in this loop forever.
+            if covered <= 0.02:
+                stalls += 1
+            else:
+                stalls = 0
+            if stalls >= 3:
+                stalls = 0
+                stall_backoffs += 1
+                if stall_backoffs > 3:
+                    print("⚠️ Rover is stuck – no progress after 3 back-offs; stopping auto mode.")
+                    stop_auto_mode()
+                    break
+                print(f"⚠️ No forward progress – backing off ({stall_backoffs}/3).")
+                auto_progress["phase"] = "obstacle"
+                reverse(AUTO_DRIVE_SPEED)
+                time.sleep(0.5)
+                stop()
+                continue
+
+            # Soil check due?  The watering run moves the rover forward, so
+            # its distance is folded back into the strip accounting.
             if distance_since_soil_check >= SOIL_CHECK_INTERVAL_M:
-                _check_and_water()
-                distance_since_soil_check = 0.0
+                watered_m = _check_and_water()
+                remaining_m = max(0.0, remaining_m - watered_m)
+                distance_since_soil_check = watered_m
                 if not auto_mode_active:
                     break
                 auto_progress["phase"] = "driving"

@@ -36,7 +36,6 @@ const gpsText = document.getElementById("gpsText");
 const videoFeed = document.getElementById("videoFeed");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
-const valVision = document.getElementById("valVision");
 const valMag = document.getElementById("valMag");
 const pinInput = document.getElementById("roverPinInput");
 
@@ -323,13 +322,6 @@ function renderTelemetry(data) {
   if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : '0';
   if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : '0';
 
-  if (data.vision_status !== undefined && valVision) {
-    const label = data.vision_status === "CLEAR"
-      ? "CLEAR"
-      : (data.vision_status === "OBSTACLE_LEFT" ? "OBST \u25c0" : "OBST \u25b6");
-    valVision.innerText = label;
-    valVision.classList.toggle("alert", data.vision_status !== "CLEAR");
-  }
   if (data.compass && valMag) {
     if (data.compass.available) {
       valMag.innerText = `${(data.compass.heading_deg || 0).toFixed(0)}\u00b0`;

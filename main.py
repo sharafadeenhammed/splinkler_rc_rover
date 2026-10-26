@@ -58,7 +58,7 @@ from helpers import (
     forward, reverse, turnRight, turnLeft, stop,
     readHumidityAndTemp, camera_servo, sensor_servo,
     MOISTURE_SENSOR, WATER_PUMP,
-    get_distance_cm, set_latest_frame, get_vision_status, analyze_visual_edges,
+    get_distance_cm,
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed,
@@ -202,7 +202,6 @@ class SharedCameraStream:
         self.frame = None  # Keep only the latest JPEG in RAM.
         self.last_client_at = time.monotonic()
         self.blocked_until = 0.0  # memory watchdog cooldown (monotonic)
-        self.vision_pinned = False  # obstruction vision keeps capture alive
 
     def subscribe(self):
         with self.lock:
@@ -222,16 +221,6 @@ class SharedCameraStream:
             self.last_client_at = time.monotonic()
             self.condition.notify_all()
 
-    def ensure_for_vision(self):
-        """Keep camera capture running for obstruction analysis even when no
-        dashboard client is watching the stream."""
-        with self.condition:
-            if time.monotonic() < self.blocked_until:
-                return  # memory watchdog cooldown: stay off until it expires
-            self.vision_pinned = True
-            if self.process is None:
-                self._start_locked()
-
     def stop(self, reason="idle", cooldown_sec=0.0):
         """Kill the camera process now (memory pressure) and optionally refuse
         to restart for cooldown_sec — the dashboard retries /stream on a timer,
@@ -239,9 +228,6 @@ class SharedCameraStream:
         with self.condition:
             self.clients = 0
             self.last_client_at = 0.0  # reader thread sees idle immediately
-            # Vision must not fight the watchdog: it re-pins itself once the
-            # cooldown expires (see ensure_for_vision).
-            self.vision_pinned = False
             if cooldown_sec:
                 self.blocked_until = time.monotonic() + cooldown_sec
             print(f"📷 Camera stopped ({reason}).")
@@ -265,11 +251,10 @@ class SharedCameraStream:
 
     def _reader(self, process):
         buffer = bytearray()
-        last_vision = 0.0
         try:
             while process.poll() is None:
                 with self.lock:
-                    idle = (not self.vision_pinned and self.clients == 0
+                    idle = (self.clients == 0
                             and time.monotonic() - self.last_client_at > 5.0)
                 if idle:
                     break
@@ -298,10 +283,6 @@ class SharedCameraStream:
                         self.frame = frame
                         self.sequence += 1
                         self.condition.notify_all()
-                    now = time.monotonic()
-                    if now - last_vision >= 1.0:
-                        set_latest_frame(frame)
-                        last_vision = now
         except (OSError, ValueError) as exc:
             print(f"Camera stream ended: {exc}")
         finally:
@@ -493,7 +474,6 @@ def get_telemetry_payload():
     payload["sensor_angle"] = sensor_servo.angle
     payload["distance_cm"] = get_distance_cm()
     payload["ultrasonic_enabled"] = is_ultrasonic_enabled()
-    payload["vision_status"] = get_vision_status()
     payload["auto_active"] = is_auto_active()
     payload["auto_progress"] = get_auto_progress()
     payload["motor_status"] = motor_status
@@ -808,37 +788,11 @@ def ws_telemetry_broadcast_loop():
         except Exception as e:
             time.sleep(1.0)
 
-# Runs camera capture + 1 Hz obstruction analysis from service startup, so
-# obstacle vision works even when the dashboard is opened with video off (or
-# not opened at all — e.g. the rover is started from the Bluetooth agent).
-# VISION_LOOP_ENABLED=0 keeps the camera fully off at startup (the dashboard
-# video button can still start it) — useful to A/B-test camera-correlated
-# power issues.
-VISION_LOOP_ENABLED = os.environ.get("VISION_LOOP_ENABLED", "1").strip().lower() in ("1", "true", "yes")
-
-
-def vision_loop():
-    if not VISION_LOOP_ENABLED:
-        print("👁️ Camera obstruction loop disabled (VISION_LOOP_ENABLED=0).")
-        return
-    print("👁️ Camera obstruction loop started.")
-    last_analysis = 0.0
-    while True:
-        try:
-            camera_stream.ensure_for_vision()
-            now = time.monotonic()
-            if now - last_analysis >= 1.0:
-                analyze_visual_edges()  # refreshes vision_status
-                last_analysis = now
-            time.sleep(1.0)
-        except Exception as exc:
-            print(f"⚠️ Vision loop error: {exc}")
-            time.sleep(2.0)
-
-
 # Background loops start exactly once, at module import — covering both
 # `python main.py` and a WSGI server (gunicorn imports main:app without ever
-# running __main__), so obstruction vision needs no HTTP request to exist.
+# running __main__), so telemetry needs no HTTP request to exist.
+# NOTE: the camera vision-analysis pipeline was removed entirely (CPU/memory
+# load on the Pi Zero W); obstacle detection is ultrasonic-only now.
 _threads_lock = threading.Lock()
 
 def start_background_threads():
@@ -857,13 +811,6 @@ def start_background_threads():
             mem_thread = threading.Thread(target=memory_watchdog_loop, daemon=True)
             mem_thread.start()
             app.memory_watchdog_started = True
-
-        # Obstruction vision shares the fate of the watchdog that can shed it
-        # under memory pressure: both start with the service, neither waits
-        # for a dashboard request (the rover may run from the BT agent alone).
-        if not getattr(app, 'vision_loop_started', False):
-            threading.Thread(target=vision_loop, daemon=True).start()
-            app.vision_loop_started = True
 
         if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
             ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)

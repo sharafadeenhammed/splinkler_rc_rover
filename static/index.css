@@ -80,7 +80,7 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
   .toast { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
 }
 
-/* Command PIN (sidebar) and live vision/compass readouts. */
+/* Command PIN (sidebar) and live compass readout. */
 .pin-input{width:100%;margin-top:8px;background:#0b111a;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:9px 10px;font:11px 'DM Mono',monospace;letter-spacing:.18em;outline:none}.pin-input:focus{border-color:var(--cyan)}.pin-input[hidden]{display:none}
 .sensor-strip strong.alert{color:var(--danger);text-shadow:0 0 8px rgba(255,111,125,.35)}
 .o-stat strong.fused{color:var(--green);text-shadow:0 0 8px rgba(108,226,157,.4)}
