@@ -81,12 +81,13 @@ from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_W
 app = Flask(__name__)
 sock = Sock(app) if HAS_SOCK else None
 
-# Optional command PIN: when ROVER_PIN is set in the service environment, the
-# six control endpoints (drive, auto, probe, pump, camera pan, auto speed)
-# and their WebSocket equivalents demand it; an empty value keeps the old
-# open behaviour.  The dashboard reads pin_required from telemetry and shows
-# the PIN field only when it is enforced.
-ROVER_PIN = os.environ.get("ROVER_PIN", "").strip()
+# Optional command PIN: the service environment's ROVER_PIN wins; when it is
+# absent, the fallback below applies (an explicit empty value keeps the old
+# open behaviour).  The six control endpoints (drive, auto, probe, pump,
+# camera pan, auto speed) and their WebSocket equivalents demand it.  The
+# dashboard reads pin_required from telemetry and shows the PIN field only
+# when it is enforced.
+ROVER_PIN = os.environ.get("ROVER_PIN", "rover_123").strip()
 _PROTECTED_WS_COMMANDS = {"motor", "sensor_deploy", "pump", "auto_mode", "auto_speed", "camera_tilt"}
 
 
