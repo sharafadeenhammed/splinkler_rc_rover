@@ -14,215 +14,54 @@
 <body>
   <div class="app-shell">
     <div class="mobile-backdrop" id="mobileBackdrop" onclick="toggleSidebar(false)"></div>
-
-    <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
     <aside class="sidebar" id="sidebar">
-      <div class="brand-lockup">
-        <div class="brand-mark">R</div>
-        <div><strong>ROVER<span>OS</span></strong><small>FIELD CONTROL</small></div>
-      </div>
-
+      <div class="brand-lockup"><div class="brand-mark">R</div><div><strong>ROVER<span>OS</span></strong><small>FIELD CONTROL</small></div></div>
       <div class="sidebar-label">Workspace</div>
-      <nav class="side-nav">
-        <a class="nav-link active" href="#overview"><span>▦</span> Console</a>
-        <a class="nav-link" href="#navigation"><span>⌖</span> Map</a>
-        <a class="nav-link" href="#sensors"><span>◌</span> Sensors</a>
-      </nav>
-
+      <nav class="side-nav"><a class="nav-link active" href="#overview"><span>▦</span> Console</a><a class="nav-link" href="#navigation"><span>⌖</span> Map</a><a class="nav-link" href="#sensors"><span>◌</span> Sensors</a></nav>
       <div class="sidebar-label">Actions</div>
-      <button class="side-action" onclick="setRoverStart()"><span>⊙</span> Origin at rover</button>
-      <button class="side-action" onclick="openModal('imuModal')"><span>◉</span> Calibrate IMU</button>
-
-      <div class="sidebar-foot">
-        <div class="system-mini"><i></i><span id="wsStatusTxt" class="connecting">CONNECTING</span><small id="sidebarClock">--:--</small></div>
-        <input type="password" id="roverPinInput" class="pin-input" placeholder="Command PIN" inputmode="numeric" autocomplete="off" hidden>
-      </div>
+      <button class="side-action" onclick="setRoverStart()"><span>⊙</span> Origin at rover</button><button class="side-action" onclick="openModal('imuModal')"><span>◉</span> Calibrate IMU</button>
+      <div class="sidebar-foot"><div class="system-mini"><i></i><span id="wsStatusTxt" class="connecting">CONNECTING</span></div><input type="password" id="roverPinInput" class="pin-input" placeholder="Command PIN" inputmode="numeric" autocomplete="off" hidden></div>
     </aside>
 
     <div class="app-content">
-      <!-- ── Topbar ────────────────────────────────────────────────────── -->
-      <header class="topbar">
-        <button class="mobile-menu" onclick="toggleSidebar(true)" aria-label="Open menu">☰</button>
-        <div class="page-heading"><span class="eyebrow">GROUNDSIDE</span><h1>Command deck</h1></div>
-        <div class="topbar-status">
-          <i class="status-dot" id="connectionDot"></i>
-          <span class="status-pill"><span class="status-key">MODE</span><strong id="modeTxt">MANUAL</strong></span>
-          <strong class="motor-state" id="statusTxt">STOPPED</strong>
-          <button class="btn btn-primary" id="autoModeBtn" onclick="toggleAutoMode()"><span id="autoStatus">Start auto</span></button>
-        </div>
-      </header>
+      <header class="topbar"><button class="mobile-menu" onclick="toggleSidebar(true)" aria-label="Open menu">☰</button><div class="page-heading"><h1>Rover console</h1></div><div class="topbar-status"><i class="status-dot" id="connectionDot"></i><span class="status-pill"><span class="status-key">MODE</span><strong id="modeTxt">MANUAL</strong></span><button class="btn btn-primary" id="autoModeBtn" onclick="toggleAutoMode()"><span id="autoStatus">Start auto</span></button><strong class="motor-state" id="statusTxt">STOPPED</strong></div></header>
 
       <main class="dashboard" id="overview">
-        <section class="workspace">
-
-          <!-- Camera -->
-          <article class="panel camera-card">
-            <div class="panel-head">
-              <div><span class="panel-kicker">CAM 01</span><h3>Onboard camera</h3></div>
-              <span class="live-tag"><i></i> LIVE</span>
-            </div>
-            <div class="video-frame">
-              <img id="videoFeed" alt="Live rover camera" onerror="handleVideoError()">
-              <div class="video-overlay"><span>PAN <b id="current-angle">0</b>°</span></div>
-            </div>
-            <div class="camera-controls">
-              <span>Camera pan</span>
-              <div>
-                <button class="icon-btn" onclick="tiltCamera('left')" aria-label="Pan left">←</button>
-                <button class="camera-center" onclick="tiltCamera('center')">CENTER</button>
-                <button class="icon-btn" onclick="tiltCamera('right')" aria-label="Pan right">→</button>
-              </div>
-            </div>
-          </article>
-
-          <!-- Work map -->
-          <article class="panel map-card" id="navigation">
-            <div class="panel-head">
-              <div><span class="panel-kicker">NAVIGATION</span><h3>Work map</h3></div>
-              <div class="map-head-meta">
-                <span class="coordinate-readout" id="poseText">0.0m, 0.0m · 0°</span>
-                <span class="gps-readout" id="gpsText">GPS —</span>
-              </div>
-            </div>
-
-            <div class="map-toolbar">
-              <span id="drawHint">Set origin at rover, then draw the work boundary</span>
-              <div class="layer-switch" role="group" aria-label="Map style">
-                <button class="layer-btn active" data-layer="streets">Street</button>
-                <button class="layer-btn" data-layer="topo">Topo</button>
-                <button class="layer-btn" data-layer="satellite">Satellite</button>
-              </div>
-              <input id="areaNameInput" value="Work area" aria-label="Work area name">
-              <button class="map-btn" onclick="centerMapOnRover()">Center</button>
-              <button class="map-btn primary-map" onclick="setRoverStart()">Origin</button>
-              <button class="map-btn" id="drawAreaBtn" onclick="toggleMapDrawing()">Draw</button>
-              <button class="map-btn" onclick="undoPolygonPoint()">Undo</button>
-              <button class="map-btn" onclick="clearPolygon()">Clear</button>
-              <button class="map-btn save-map" onclick="savePolygonArea()">Save</button>
-            </div>
-
-            <div class="map-body">
-              <div id="roverMap" aria-label="Work area map"></div>
-              <span class="map-coords" id="mapCoordinateText">—</span>
-            </div>
-
-            <div class="map-legend">
-              <span><i class="legend-area"></i> Work area</span>
-              <span><i class="legend-trail"></i> Track</span>
-              <span><i class="legend-rover"></i> Rover</span>
-            </div>
-          </article>
-
-          <!-- Attitude & heading -->
-          <article class="panel attitude-card">
-            <div class="panel-head">
-              <div><span class="panel-kicker">HEADING</span><h3>Attitude &amp; compass</h3></div>
-              <span class="fuse-chip" id="compassState">—</span>
-            </div>
-
-            <div class="compass-wrap">
-              <svg class="compass" viewBox="0 0 200 200" aria-label="Compass heading">
-                <g class="rose-face">
-                  <circle cx="100" cy="100" r="92" class="rose-ring"/>
-                  <circle cx="100" cy="100" r="74" class="rose-ring inner"/>
-                  <g class="rose-ticks">
-                    <path d="M100 12 v14"/><path d="M188 100 h-14"/>
-                    <path d="M100 188 v-14"/><path d="M12 100 h14"/>
-                  </g>
-                  <g class="rose-ticks minor" id="roseMinor"><!-- JS builds 30° ticks --></g>
-                  <text x="100" y="36" class="rose-cardinal north">N</text>
-                  <text x="164" y="100" class="rose-cardinal">E</text>
-                  <text x="100" y="164" class="rose-cardinal">S</text>
-                  <text x="36" y="100" class="rose-cardinal">W</text>
-                </g>
-                <g id="compassNeedle" class="compass-needle">
-                  <path d="M100 30 L110 104 L100 96 L90 104 Z" class="needle-head"/>
-                  <path d="M100 170 L110 96 L100 104 L90 96 Z" class="needle-tail"/>
-                  <circle cx="100" cy="100" r="6" class="needle-hub"/>
-                </g>
-                <g class="lubber"><path d="M100 6 l6 10 h-12 z"/></g>
-              </svg>
-              <div class="compass-readout">
-                <strong id="headingDigits">---°</strong>
-                <small id="headingSub">waiting for pose</small>
-              </div>
-            </div>
-
-            <div class="attitude-meta">
-              <span class="mag-readout">MAG <b id="valMag">--</b></span>
-              <span class="chip-name" id="compassChip"></span>
-            </div>
-
-            <div class="orientation-panel">
-              <div class="rover-stage">
-                <div class="ground-shadow"></div>
-                <div class="rover-3d-model" id="rover3dModel">
-                  <span class="face c-top"></span>
-                  <span class="face c-bottom"></span>
-                  <span class="face c-front"></span>
-                  <span class="face c-back"></span>
-                  <span class="face c-left"></span>
-                  <span class="face c-right"></span>
-                  <span class="deck"></span>
-                  <span class="dome"></span>
-                  <div class="wheel w-fl"><span class="cap out"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                  <div class="wheel w-fr"><span class="cap out"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                  <div class="wheel w-rl"><span class="cap out"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                  <div class="wheel w-rr"><span class="cap out"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                </div>
-              </div>
-              <div class="orientation-stats">
-                <div class="o-stat"><small>PITCH</small><strong><span id="valPitch">0</span>°</strong></div>
-                <div class="o-stat"><small>ROLL</small><strong><span id="valRoll">0</span>°</strong></div>
-                <div class="o-stat"><small>YAW</small><strong><span id="valYaw">0</span>°</strong></div>
-              </div>
-            </div>
-          </article>
-
-          <!-- Drive / motors -->
-          <article class="panel drive-card">
-            <div class="panel-head">
-              <div><span class="panel-kicker">DRIVETRAIN</span><h3>Motor output</h3></div>
-              <span class="drive-mode" id="driveMode">IDLE</span>
-            </div>
-
-            <div class="track" data-side="left">
-              <div class="track-head"><span>LEFT</span><b id="motorPctL">0%</b></div>
-              <div class="track-rail">
-                <i class="track-zero"></i>
-                <div class="track-fill" id="motorBarL"></div>
-              </div>
-              <div class="track-foot"><span>ticks</span><b id="valEncLeft">0</b></div>
-            </div>
-
-            <div class="track" data-side="right">
-              <div class="track-head"><span>RIGHT</span><b id="motorPctR">0%</b></div>
-              <div class="track-rail">
-                <i class="track-zero"></i>
-                <div class="track-fill" id="motorBarR"></div>
-              </div>
-              <div class="track-foot"><span>ticks</span><b id="valEncRight">0</b></div>
-            </div>
-
-            <div class="drive-dir" id="motorDir">STOPPED</div>
-          </article>
-
+        <section class="workspace-grid">
+          <article class="panel camera-card"><div class="panel-head"><h3>Camera</h3><span class="live-tag"><i></i> LIVE</span></div><div class="video-frame"><img id="videoFeed" alt="Live rover camera" onerror="handleVideoError()"><div class="video-overlay"><span>CAM 01</span><span id="current-angle">0</span>°</div></div><div class="camera-controls"><span>Camera pan</span><div><button class="icon-btn" onclick="tiltCamera('left')">←</button><button class="camera-center" onclick="tiltCamera('center')">PAN</button><button class="icon-btn" onclick="tiltCamera('right')">→</button></div></div></article>
+          <article class="panel map-card" id="navigation"><div class="panel-head"><div><h3>Work map</h3><span class="coordinate-readout" id="poseText">0.0m, 0.0m · 0°</span></div><div class="map-head-meta"><span class="gps-readout" id="gpsText">GPS —</span><span class="map-source" id="mapCoordinateText">OpenStreetMap</span></div></div><div class="map-toolbar"><span id="drawHint">Set origin at rover, then draw the work boundary</span><input id="areaNameInput" value="Work area" aria-label="Work area name"><button class="map-btn" onclick="centerMapOnRover()">Center</button><button class="map-btn primary-map" onclick="setRoverStart()">Origin here</button><button class="map-btn" id="drawAreaBtn" onclick="toggleMapDrawing()">Draw</button><button class="map-btn" onclick="undoPolygonPoint()">Undo</button><button class="map-btn" onclick="clearPolygon()">Clear</button><button class="map-btn save-map" onclick="savePolygonArea()">Save</button></div><div id="roverMap" aria-label="OpenStreetMap work area selector"></div></article>
         </section>
-
-        <!-- ── Manual drive dock ───────────────────────────────────────── -->
-        <section class="manual-dock" aria-label="Manual drive controls">
-          <div class="manual-dock-head">
-            <span class="manual-dock-label">Manual drive</span>
-            <span class="control-hint compact">Hold buttons or <kbd>WASD</kbd> · <kbd>Space</kbd> stops</span>
+        <section class="manual-dock" id="manualDock" aria-label="Manual drive controls">
+          <div class="manual-dock-head"><span class="manual-dock-label">Manual drive</span><span class="control-hint compact">Hold buttons or WASD · Space stops</span></div>
+          <div class="manual-speed"><span>Speed</span><input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider" aria-label="Manual drive speed"><output id="throttleOutput">50%</output><b id="targetVal" hidden>50</b></div>
+          <div class="orientation-panel" aria-label="Rover orientation">
+            <div class="rover-stage">
+              <div class="ground-shadow"></div>
+              <div class="rover-3d-model" id="rover3dModel">
+                <span class="face c-top"></span>
+                <span class="face c-bottom"></span>
+                <span class="face c-front"></span>
+                <span class="face c-back"></span>
+                <span class="face c-left"></span>
+                <span class="face c-right"></span>
+                <span class="deck"></span>
+                <span class="dome"></span>
+                <span class="rail rail-l"></span>
+                <span class="rail rail-r"></span>
+                <div class="wheel w-fl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                <div class="wheel w-fr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                <div class="wheel w-rl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                <div class="wheel w-rr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+              </div>
+            </div>
+            <div class="orientation-stats">
+              <div class="o-stat"><small>PITCH</small><strong><span id="valPitch">0</span>&deg;</strong></div>
+              <div class="o-stat"><small>ROLL</small><strong><span id="valRoll">0</span>&deg;</strong></div>
+              <div class="o-stat"><small>YAW</small><strong><span id="valYaw">0</span>&deg;</strong></div>
+              <div class="o-stat"><small>MAG</small><strong id="valMag">--</strong></div>
+            </div>
           </div>
-
-          <div class="manual-speed">
-            <span>Speed</span>
-            <input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider" aria-label="Manual drive speed">
-            <output id="throttleOutput">50%</output>
-          </div>
-
-          <div class="drive-pad">
+          <div class="drive-pad drive-pad--dock">
             <button type="button" class="drive-key up" id="forwardBtn" aria-label="Forward">▲</button>
             <button type="button" class="drive-key left" id="leftBtn" aria-label="Turn left">◀</button>
             <button type="button" class="drive-key stop" id="stopBtn" aria-label="Stop">■</button>
@@ -230,52 +69,13 @@
             <button type="button" class="drive-key down" id="reverseBtn" aria-label="Reverse">▼</button>
           </div>
         </section>
-
-        <!-- ── Sensor / mission dock ───────────────────────────────────── -->
-        <section class="bottom-dock" id="sensors">
-          <div class="sensor-strip">
-            <div><small>TEMP</small><strong id="valTemp">--</strong></div>
-            <div><small>HUMIDITY</small><strong id="valHumidity">--</strong></div>
-            <div><small>SOIL</small><strong id="valSoil">Dry</strong></div>
-            <div><small>OBSTACLE</small><strong id="valDist">-- cm</strong></div>
-            <div class="mission-cell">
-              <small>MISSION</small>
-              <strong id="autoProgressText">IDLE</strong>
-            </div>
-            <div class="dock-progress"><i id="autoProgressFill"></i></div>
-            <strong id="missionPercent" class="mission-pct">0%</strong>
-          </div>
-
-          <div class="dock-controls">
-            <label>Auto speed <b><span id="autoSpeedVal">70</span>%</b>
-              <input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()">
-            </label>
-            <button class="equipment-mini" id="sensorDeployBtn" onclick="toggleSensorDeploy()">Probe <span id="sensorStatus">RETRACTED</span></button>
-            <button class="equipment-mini" id="pumpToggleBtn" onclick="toggleWaterPump()">Pump <span id="pumpStatus">OFF</span></button>
-            <button class="equipment-mini" onclick="openModal('imuModal')">Calibrate IMU</button>
-          </div>
-        </section>
+        <section class="bottom-dock" id="sensors"><div class="sensor-strip"><div><small>TEMP</small><strong id="valTemp">--</strong></div><div><small>HUMIDITY</small><strong id="valHumidity">--</strong></div><div><small>SOIL</small><strong id="valSoil">Dry</strong></div><div><small>OBSTACLE</small><strong id="valDist">-- cm</strong></div><div><small>LEFT TICKS</small><strong id="valEncLeft">0</strong></div><div><small>RIGHT TICKS</small><strong id="valEncRight">0</strong></div><span id="autoProgressText">IDLE</span><div class="dock-progress"><i id="autoProgressFill"></i></div><strong id="missionPercent">0%</strong></div><div class="dock-controls"><label>Auto speed <b><span id="autoSpeedVal">70</span>%</b><input type="range" id="autoSpeedSlider" min="10" max="100" value="70" step="5" onchange="updateAutoSpeed()"></label><button class="equipment-mini" id="sensorDeployBtn" onclick="toggleSensorDeploy()">Probe <span id="sensorStatus">RETRACTED</span></button><button class="equipment-mini" id="pumpToggleBtn" onclick="toggleWaterPump()">Pump <span id="pumpStatus">OFF</span></button><button class="equipment-mini" onclick="openModal('imuModal')">Calibrate IMU</button></div><div id="sensorReadings" hidden></div></section>
       </main>
     </div>
   </div>
 
-  <!-- ── IMU calibration modal ─────────────────────────────────────────── -->
-  <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')">
-    <div class="modal small-modal">
-      <button class="modal-close" onclick="closeModal('imuModal')" aria-label="Close">×</button>
-      <span class="panel-kicker">INERTIAL SENSOR</span>
-      <h2>Calibrate MPU6050</h2>
-      <p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p>
-      <div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button>
-        <button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button>
-      </div>
-    </div>
-  </div>
-
+  <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')"><div class="modal small-modal"><button class="modal-close" onclick="closeModal('imuModal')">×</button><span class="panel-kicker">INERTIAL SENSOR</span><h2>Calibrate MPU6050</h2><p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p><div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button><button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button></div></div></div>
   <div class="toast" id="toast"></div>
-
   <script src="/static/vendor/leaflet.js"></script>
   <script src="/static/index.js"></script>
 </body>
