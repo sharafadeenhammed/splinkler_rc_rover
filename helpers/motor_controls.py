@@ -31,6 +31,7 @@ def stop():
         LEFT_MOTOR_REVERSE.value  = 0
         RIGHT_MOTOR_FORWARD.value = 0
         RIGHT_MOTOR_REVERSE.value = 0
+    _remember(0.0, 0.0)
 
 
 def _drive_forward(speed):
@@ -38,6 +39,7 @@ def _drive_forward(speed):
     stop()
     LEFT_MOTOR_FORWARD.value  = speed
     RIGHT_MOTOR_FORWARD.value = speed
+    _remember(speed, speed)
 
 
 def _drive_reverse(speed):
@@ -45,6 +47,7 @@ def _drive_reverse(speed):
     stop()
     LEFT_MOTOR_REVERSE.value  = speed
     RIGHT_MOTOR_REVERSE.value = speed
+    _remember(-speed, -speed)
 
 
 def forward(speed=1.0):
@@ -64,6 +67,18 @@ def reverse(speed=1.0):
 
 last_left_speed = None
 last_right_speed = None
+
+def _remember(logical_left, logical_right):
+    """Record the commanded wheel duties so telemetry (dashboard drive bars)
+    always shows what the wheels are being asked to do.  Values are stored in
+    the same convention drive_tank uses (forward-pin sign), i.e. negated when
+    MOTOR_REVERSED swaps the physical channels."""
+    global last_left_speed, last_right_speed
+    if MOTOR_REVERSED:
+        logical_left = -logical_left
+        logical_right = -logical_right
+    last_left_speed = logical_left
+    last_right_speed = logical_right
 
 def drive_tank(left_speed, right_speed):
     """
@@ -124,14 +139,16 @@ def turnRight(speed=1.0):
     else:
         LEFT_MOTOR_FORWARD.value  = speed
         RIGHT_MOTOR_REVERSE.value = speed
+    _remember(speed, -speed)
 
 
 def turnLeft(speed=1.0):
     """Pivot left: right side forward, left side reverse."""
     stop()
     if MOTOR_REVERSED:
-        RIGHT_MOTOR_REVERSE.value = speed
+        RIGHT_MOTOR_REVERSE.value  = speed
         LEFT_MOTOR_FORWARD.value  = speed
     else:
         LEFT_MOTOR_REVERSE.value  = speed
         RIGHT_MOTOR_FORWARD.value = speed
+    _remember(-speed, speed)

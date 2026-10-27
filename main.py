@@ -73,6 +73,7 @@ from helpers.hmc5883l import (
     get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
 from helpers.pose_fusion import gps_heading_usable
+from helpers import motor_controls
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
 from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
@@ -481,6 +482,12 @@ def get_telemetry_payload():
     lt, rt = get_encoder_ticks()
     payload["encoder_left"] = lt
     payload["encoder_right"] = rt
+    # Live wheel duty (−1..1, logical direction) for the dashboard drive bars.
+    left_duty = motor_controls.last_left_speed or 0.0
+    right_duty = motor_controls.last_right_speed or 0.0
+    if motor_controls.MOTOR_REVERSED:
+        left_duty, right_duty = -left_duty, -right_duty
+    payload["motor_drive"] = {"left": float(left_duty), "right": float(right_duty)}
     payload["encoder_config"] = encoder_config()
     payload["imu"] = get_imu_snapshot()
     payload["compass"] = get_compass_snapshot()
