@@ -1,12 +1,16 @@
-"""SQLite persistence and local pose tracking for the rover."""
+"""Work-area & map-origin persistence (JSON file) + local pose tracking.
 
-import math
+History/run/telemetry logging was removed on purpose: the rover no longer
+writes navigation events anywhere.  Only what the dashboard needs to survive
+a reboot is persisted — the saved work areas and the map origin — in a small
+atomic JSON file.
+"""
+
 import json
+import math
 import os
-import sqlite3
 import threading
 import time
-from contextlib import contextmanager
 
 from .pose_fusion import (
     GPS_FUSION_ALPHA,
@@ -19,96 +23,77 @@ from .pose_fusion import (
     normalize_angle_rad,
 )
 
+STORE_PATH = os.environ.get(
+    "ROVER_AREAS_PATH",
+    os.path.join(os.path.dirname(__file__), "..", "work_areas.json"),
+)
 
-DB_PATH = os.environ.get("ROVER_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "rover.db"))
-print(" ---- ---- ---- db path -- ", DB_PATH)
+_EMPTY_STORE = {"next_area_id": 1, "map_origin": None, "areas": []}
 
 
 class NavigationDatabase:
-    def __init__(self, path=DB_PATH):
+    """Tiny atomic JSON store for work areas + map origin."""
+
+    def __init__(self, path=STORE_PATH):
         self.path = os.path.abspath(path)
         self.lock = threading.RLock()
-        self._init_schema()
+        self._data = self._load()
 
-    def _connect(self):
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
-
-    @contextmanager
-    def _connection(self):
-        conn = self._connect()
+    def _load(self):
         try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            with open(self.path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict) or not isinstance(data.get("areas"), list):
+                raise ValueError("unexpected store shape")
+            data.setdefault("next_area_id", 1)
+            data.setdefault("map_origin", None)
+            return data
+        except FileNotFoundError:
+            return json.loads(json.dumps(_EMPTY_STORE))
+        except (ValueError, TypeError, OSError) as exc:
+            print(f"⚠️ work area store unreadable ({exc}); starting empty")
+            return json.loads(json.dumps(_EMPTY_STORE))
 
-    def _init_schema(self):
-        with self.lock, self._connection() as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS work_areas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    min_x REAL NOT NULL, min_y REAL NOT NULL,
-                    max_x REAL NOT NULL, max_y REAL NOT NULL,
-                    polygon_json TEXT,
-                    map_polygon_json TEXT,
-                    origin_lat REAL,
-                    origin_lon REAL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    active INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS rover_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    area_id INTEGER,
-                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    ended_at TEXT,
-                    status TEXT NOT NULL DEFAULT 'running',
-                    FOREIGN KEY(area_id) REFERENCES work_areas(id)
-                );
-                CREATE TABLE IF NOT EXISTS telemetry (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id INTEGER,
-                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    x REAL NOT NULL, y REAL NOT NULL, heading_deg REAL NOT NULL,
-                    left_ticks INTEGER NOT NULL, right_ticks INTEGER NOT NULL,
-                    pitch_deg REAL, roll_deg REAL, gyro_z_dps REAL,
-                    FOREIGN KEY(run_id) REFERENCES rover_runs(id)
-                );
-                CREATE TABLE IF NOT EXISTS app_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(work_areas)")}
-            if "polygon_json" not in columns:
-                conn.execute("ALTER TABLE work_areas ADD COLUMN polygon_json TEXT")
-            for column, kind in (("map_polygon_json", "TEXT"), ("origin_lat", "REAL"), ("origin_lon", "REAL")):
-                if column not in columns:
-                    conn.execute(f"ALTER TABLE work_areas ADD COLUMN {column} {kind}")
+    def _flush_locked(self):
+        """Atomic write so a power cut can never leave a half-written file."""
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(self._data, fh, indent=1)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self.path)
+
+    # ── work areas ─────────────────────────────────────────────────────
 
     @staticmethod
-    def _area_dict(row):
-        if not row:
-            return None
-        area = dict(row)
-        try:
-            area["polygon"] = json.loads(area.get("polygon_json") or "[]")
-        except (TypeError, ValueError):
-            area["polygon"] = []
-        area.pop("polygon_json", None)
-        try:
-            area["map_polygon"] = json.loads(area.get("map_polygon_json") or "[]")
-        except (TypeError, ValueError):
-            area["map_polygon"] = []
-        area.pop("map_polygon_json", None)
+    def _new_area(area_id, name, points, map_points, origin):
+        clean = [[float(p[0]), float(p[1])] for p in points]
+        min_x = min(p[0] for p in clean)
+        max_x = max(p[0] for p in clean)
+        min_y = min(p[1] for p in clean)
+        max_y = max(p[1] for p in clean)
+        return {
+            "id": area_id,
+            "name": str(name or "Work area"),
+            "min_x": min_x,
+            "min_y": min_y,
+            "max_x": max_x,
+            "max_y": max_y,
+            "polygon": clean,
+            "map_polygon": [[float(p[0]), float(p[1])] for p in (map_points or [])],
+            "origin_lat": float(origin[0]) if origin else None,
+            "origin_lon": float(origin[1]) if origin else None,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "active": 1,
+        }
+
+    def _insert_locked(self, area):
+        for other in self._data["areas"]:
+            other["active"] = 0
+        area["id"] = self._data["next_area_id"]
+        self._data["next_area_id"] += 1
+        self._data["areas"].append(area)
+        self._flush_locked()
         return area
 
     def save_area(self, name, min_x, min_y, max_x, max_y):
@@ -116,15 +101,9 @@ class NavigationDatabase:
         min_y, max_y = sorted((float(min_y), float(max_y)))
         if min_x == max_x or min_y == max_y:
             raise ValueError("A work area must have non-zero width and height")
-        with self.lock, self._connection() as conn:
-            conn.execute("UPDATE work_areas SET active = 0")
-            cur = conn.execute(
-                "INSERT INTO work_areas(name,min_x,min_y,max_x,max_y,polygon_json,active) VALUES(?,?,?,?,?,?,1)",
-                (str(name or "Work area"), min_x, min_y, max_x, max_y,
-                 json.dumps([[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]])),
-            )
-            area_id = cur.lastrowid
-        return self.get_area(area_id)
+        rectangle = [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]]
+        with self.lock:
+            return self._insert_locked(self._new_area(0, name, rectangle, None, None))
 
     def save_polygon_area(self, name, points, map_points=None, origin=None):
         """Save local metre points and optional geographic map coordinates."""
@@ -135,112 +114,60 @@ class NavigationDatabase:
             clean.append([float(point[0]), float(point[1])])
         if len(clean) < 3:
             raise ValueError("Draw at least three points for the work area")
-        min_x = min(point[0] for point in clean)
-        max_x = max(point[0] for point in clean)
-        min_y = min(point[1] for point in clean)
-        max_y = max(point[1] for point in clean)
+        min_x = min(p[0] for p in clean)
+        max_x = max(p[0] for p in clean)
+        min_y = min(p[1] for p in clean)
+        max_y = max(p[1] for p in clean)
         if min_x == max_x or min_y == max_y:
             raise ValueError("The work area must have width and height")
-        with self.lock, self._connection() as conn:
-            conn.execute("UPDATE work_areas SET active = 0")
-            geo = [[float(point[0]), float(point[1])] for point in (map_points or [])]
-            origin_lat = float(origin[0]) if origin else None
-            origin_lon = float(origin[1]) if origin else None
-            cur = conn.execute(
-                "INSERT INTO work_areas(name,min_x,min_y,max_x,max_y,polygon_json,map_polygon_json,origin_lat,origin_lon,active) VALUES(?,?,?,?,?,?,?,?,?,1)",
-                (str(name or "Work area"), min_x, min_y, max_x, max_y, json.dumps(clean),
-                 json.dumps(geo), origin_lat, origin_lon),
-            )
-            area_id = cur.lastrowid
-        return self.get_area(area_id)
+        if map_points is not None and len(map_points) != len(clean):
+            raise ValueError("Map points must match boundary points")
+        with self.lock:
+            return self._insert_locked(self._new_area(0, name, clean, map_points, origin))
 
     def get_area(self, area_id):
-        with self.lock, self._connection() as conn:
-            row = conn.execute("SELECT * FROM work_areas WHERE id = ?", (area_id,)).fetchone()
-            return self._area_dict(row)
+        with self.lock:
+            for area in self._data["areas"]:
+                if area["id"] == int(area_id):
+                    return area
+        return None
 
     def list_areas(self):
-        with self.lock, self._connection() as conn:
-            return [self._area_dict(row) for row in conn.execute("SELECT * FROM work_areas ORDER BY id DESC")]
+        with self.lock:
+            return list(reversed(self._data["areas"]))
 
     def active_area(self):
-        with self.lock, self._connection() as conn:
-            row = conn.execute("SELECT * FROM work_areas WHERE active = 1 ORDER BY id DESC LIMIT 1").fetchone()
-            return self._area_dict(row)
+        with self.lock:
+            for area in reversed(self._data["areas"]):
+                if area.get("active"):
+                    return area
+        return None
+
+    # ── map origin ─────────────────────────────────────────────────────
 
     def save_map_origin(self, latitude, longitude):
         origin = [float(latitude), float(longitude)]
-        with self.lock, self._connection() as conn:
-            conn.execute(
-                "INSERT INTO app_settings(key,value) VALUES('map_origin',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
-                (json.dumps(origin),),
-            )
+        with self.lock:
+            self._data["map_origin"] = origin
+            self._flush_locked()
         return origin
 
     def map_origin(self):
-        with self.lock, self._connection() as conn:
-            row = conn.execute("SELECT value FROM app_settings WHERE key='map_origin'").fetchone()
-            if not row:
-                return None
-            try:
-                value = json.loads(row["value"])
-                if len(value) == 2:
-                    return [float(value[0]), float(value[1])]
-            except (ValueError, TypeError):
-                pass
-            return None
-
-    def start_run(self, area_id=None):
-        with self.lock, self._connection() as conn:
-            cur = conn.execute("INSERT INTO rover_runs(area_id) VALUES(?)", (area_id,))
-            return cur.lastrowid
-
-    def finish_run(self, run_id, status="complete"):
-        with self.lock, self._connection() as conn:
-            conn.execute("UPDATE rover_runs SET ended_at = CURRENT_TIMESTAMP, status = ? WHERE id = ?", (status, run_id))
-
-    def record_telemetry(self, run_id, pose, imu, left_ticks, right_ticks):
-        with self.lock, self._connection() as conn:
-            conn.execute(
-                "INSERT INTO telemetry(run_id,x,y,heading_deg,left_ticks,right_ticks,pitch_deg,roll_deg,gyro_z_dps) VALUES(?,?,?,?,?,?,?,?,?)",
-                (run_id, pose["x_m"], pose["y_m"], pose["heading_deg"], left_ticks, right_ticks,
-                 imu.get("pitch_deg"), imu.get("roll_deg"), imu.get("gyro_z_dps")),
-            )
-
-    def recent_telemetry(self, run_id=None, limit=500):
-        limit = max(1, min(5000, int(limit)))
-        with self.lock, self._connection() as conn:
-            if run_id is None:
-                rows = conn.execute(
-                    "SELECT * FROM telemetry ORDER BY id DESC LIMIT ?", (limit,)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM telemetry WHERE run_id = ? ORDER BY id DESC LIMIT ?",
-                    (run_id, limit),
-                ).fetchall()
-            return [dict(row) for row in reversed(rows)]
-
-    def recent_runs(self, limit=50):
-        limit = max(1, min(500, int(limit)))
-        with self.lock, self._connection() as conn:
-            return [dict(row) for row in conn.execute(
-                "SELECT * FROM rover_runs ORDER BY id DESC LIMIT ?", (limit,)
-            )]
+        with self.lock:
+            origin = self._data.get("map_origin")
+            if isinstance(origin, (list, tuple)) and len(origin) == 2:
+                return [float(origin[0]), float(origin[1])]
+        return None
 
 
 class PoseTracker:
-    def __init__(self, database, wheel_diameter_m, wheel_track_m, ticks_per_rev):
-        self.db = database
+    def __init__(self, wheel_diameter_m, wheel_track_m, ticks_per_rev):
         self.circumference = math.pi * wheel_diameter_m
         self.track = wheel_track_m
         self.ticks_per_rev = ticks_per_rev
         self.x = self.y = self.heading_rad = 0.0
         self._x_odom = self._y_odom = 0.0
         self._last_ticks = None
-        self._last_save = 0.0
-        self.run_id = None
         self.lock = threading.RLock()
         self.origin_lat = None
         self.origin_lon = None
@@ -322,13 +249,7 @@ class PoseTracker:
             self._last_ticks = (left_ticks, right_ticks)
             if gps:
                 self._apply_gps_fusion(gps)
-            pose = self._snapshot_locked()
-
-        now = time.monotonic()
-        if self.run_id and now - self._last_save >= 1.0:
-            self.db.record_telemetry(self.run_id, pose, imu or {}, left_ticks, right_ticks)
-            self._last_save = now
-        return pose
+            return self._snapshot_locked()
 
     def _snapshot_locked(self):
         return {

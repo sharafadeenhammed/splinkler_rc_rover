@@ -34,31 +34,40 @@
         <section class="manual-dock" id="manualDock" aria-label="Manual drive controls">
           <div class="manual-dock-head"><span class="manual-dock-label">Manual drive</span><span class="control-hint compact">Hold buttons or WASD · Space stops</span></div>
           <div class="manual-speed"><span>Speed</span><input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider" aria-label="Manual drive speed"><output id="throttleOutput">50%</output><b id="targetVal" hidden>50</b></div>
-          <div class="orientation-panel" aria-label="Rover orientation">
-            <div class="rover-stage">
-              <div class="ground-shadow"></div>
-              <div class="rover-3d-model" id="rover3dModel">
-                <span class="face c-top"></span>
-                <span class="face c-bottom"></span>
-                <span class="face c-front"></span>
-                <span class="face c-back"></span>
-                <span class="face c-left"></span>
-                <span class="face c-right"></span>
-                <span class="deck"></span>
-                <span class="dome"></span>
-                <span class="rail rail-l"></span>
-                <span class="rail rail-r"></span>
-                <div class="wheel w-fl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                <div class="wheel w-fr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                <div class="wheel w-rl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                <div class="wheel w-rr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+          <div class="orientation-panel" aria-label="Vehicle heading">
+            <div class="compass-head"><small>HEADING</small><b id="headingDigits">---°</b></div>
+            <div class="compass-face">
+              <svg class="compass-card" id="compassCard" viewBox="0 0 200 200" aria-hidden="true">
+                <circle cx="100" cy="100" r="94" class="cc-edge"/>
+                <circle cx="100" cy="100" r="76" class="cc-inner"/>
+                <g id="compassTicks"></g>
+                <text x="100" y="34" class="cc-cardinal cc-n">N</text>
+                <text x="166" y="100" class="cc-cardinal">E</text>
+                <text x="100" y="166" class="cc-cardinal">S</text>
+                <text x="34" y="100" class="cc-cardinal">W</text>
+              </svg>
+              <span class="lubber-line" aria-hidden="true"></span>
+              <div class="rover-stage">
+                <div class="ground-shadow"></div>
+                <div class="rover-3d-model" id="rover3dModel">
+                  <span class="face c-top"></span>
+                  <span class="face c-bottom"></span>
+                  <span class="face c-front"></span>
+                  <span class="face c-back"></span>
+                  <span class="face c-left"></span>
+                  <span class="face c-right"></span>
+                  <span class="deck"></span>
+                  <span class="dome"></span>
+                  <span class="rail rail-l"></span>
+                  <span class="rail rail-r"></span>
+                  <span class="bar b-front"></span>
+                  <span class="bar b-back"></span>
+                  <div class="wheel w-fl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                  <div class="wheel w-fr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                  <div class="wheel w-rl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                  <div class="wheel w-rr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
+                </div>
               </div>
-            </div>
-            <div class="orientation-stats">
-              <div class="o-stat"><small>PITCH</small><strong><span id="valPitch">0</span>&deg;</strong></div>
-              <div class="o-stat"><small>ROLL</small><strong><span id="valRoll">0</span>&deg;</strong></div>
-              <div class="o-stat"><small>YAW</small><strong><span id="valYaw">0</span>&deg;</strong></div>
-              <div class="o-stat"><small>MAG</small><strong id="valMag">--</strong></div>
             </div>
           </div>
           <div class="drive-pad drive-pad--dock">

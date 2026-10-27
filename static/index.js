@@ -36,8 +36,24 @@ const gpsText = document.getElementById("gpsText");
 const videoFeed = document.getElementById("videoFeed");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
-const valMag = document.getElementById("valMag");
+const compassCard = document.getElementById("compassCard");
+const headingDigits = document.getElementById("headingDigits");
 const pinInput = document.getElementById("roverPinInput");
+
+// Build the compass card ticks once (every 10°, majors on the cardinals).
+(function buildCompassTicks() {
+  const group = document.getElementById("compassTicks");
+  if (!group) return;
+  const svgNS = "http://www.w3.org/2000/svg";
+  for (let deg = 0; deg < 360; deg += 10) {
+    const major = deg % 90 === 0;
+    const path = document.createElementNS(svgNS, "path");
+    path.setAttribute("d", `M100 ${100 - 94} V ${100 - (major ? 78 : 86)}`);
+    path.setAttribute("transform", `rotate(${deg} 100 100)`);
+    path.setAttribute("class", major ? "cc-tick major" : "cc-tick");
+    group.appendChild(path);
+  }
+})();
 
 // Dynamic base URLs
 const baseURL = window.location.origin;
@@ -310,6 +326,43 @@ function fetchSensorDataHttp() {
     .catch((err) => console.warn("HTTP Telemetry fetch error:", err));
 }
 
+// ----------------- Compass instrument -----------------
+// Aviation pattern: the vehicle crate stays fixed in the middle, the card
+// rotates behind it under a fixed lubber line.  Pose/IMU heading is math
+// style (0° = east, CCW); the compass shows 0° = north, clockwise.
+
+let compassRotation = 0;
+let compassPrev = null;
+
+function compassDeg(mathDeg) {
+  return ((90 - mathDeg) % 360 + 360) % 360;
+}
+
+function updateCompass(data) {
+  let heading = null;
+  if (data.pose && Number.isFinite(data.pose.heading_deg)) {
+    heading = compassDeg(data.pose.heading_deg);
+  } else if (data.imu && data.imu.available && Number.isFinite(data.imu.heading_deg)) {
+    heading = compassDeg(data.imu.heading_deg); // relative gyro fallback
+  }
+  if (heading === null) return;
+
+  if (compassPrev === null) {
+    // First fix: start from due north so the card sweeps in once.
+    compassPrev = heading;
+    compassRotation = heading;
+  } else {
+    // Always take the short way round so 359° → 01° nudges instead of spinning.
+    const delta = ((heading - compassPrev + 180) % 360 + 360) % 360 - 180;
+    compassRotation += delta;
+    compassPrev = heading;
+  }
+  if (compassCard) compassCard.style.transform = `rotate(${-compassRotation}deg)`;
+  if (headingDigits) {
+    headingDigits.innerText = `${String(Math.round(heading) % 360).padStart(3, "0")}\u00b0`;
+  }
+}
+
 // ----------------- Telemetry Renderer -----------------
 
 function renderTelemetry(data) {
@@ -322,15 +375,6 @@ function renderTelemetry(data) {
   if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : '0';
   if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : '0';
 
-  if (data.compass && valMag) {
-    if (data.compass.available) {
-      valMag.innerText = `${(data.compass.heading_deg || 0).toFixed(0)}\u00b0`;
-      valMag.classList.toggle("fused", !!data.compass.fusion_active);
-    } else {
-      valMag.innerText = "--";
-      valMag.classList.remove("fused");
-    }
-  }
   if (pinInput && data.pin_required !== undefined) {
     pinInput.hidden = !data.pin_required;
   }
@@ -378,19 +422,13 @@ function renderTelemetry(data) {
   if (data.imu) {
     const pitch = data.imu.pitch_deg || 0;
     const roll = data.imu.roll_deg || 0;
-    const yaw = data.imu.heading_deg || 0;
-    const pitchEl = document.getElementById("valPitch");
-    const rollEl = document.getElementById("valRoll");
-    const yawEl = document.getElementById("valYaw");
-    if (pitchEl) pitchEl.innerText = pitch.toFixed(1);
-    if (rollEl) rollEl.innerText = roll.toFixed(1);
-    if (yawEl) yawEl.innerText = yaw.toFixed(1);
     const model = document.getElementById("rover3dModel");
     if (model) {
-      // CSS 3D transform mapping
-      model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg) rotateZ(${-yaw}deg)`;
+      // Attitude only — heading lives on the compass card now.
+      model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg)`;
     }
   }
+  updateCompass(data);
 }
 
 function updateGpsReadout(gps) {

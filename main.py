@@ -119,8 +119,7 @@ data_lock = threading.Lock()
 clients_lock = threading.Lock()
 connected_clients = set()
 MAX_WS_CLIENTS = 2
-pose_tracker = PoseTracker(DB, WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
-current_run_id = None
+pose_tracker = PoseTracker(WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
 saved_area = DB.active_area()
 saved_map_origin = DB.map_origin()
 _map_origin_cache = {"value": saved_map_origin}
@@ -132,7 +131,7 @@ if saved_area and len(saved_area.get("polygon", [])) >= 3:
     except (TypeError, ValueError):
         pass
 
-# Cache for the active work area so telemetry doesn't hit the database every build.
+# Cache for the active work area so telemetry doesn't re-read the store every build.
 _area_cache = {"value": None, "ts": 0.0}
 
 
@@ -145,8 +144,7 @@ def cached_active_area():
 
 
 def navigation_loop():
-  """Update local pose and persist navigation telemetry at 20 Hz."""
-  global current_run_id
+  """Update local pose at 20 Hz (nothing is persisted)."""
   print("🧭 Navigation loop started.")
   while True:
     try:
@@ -163,10 +161,6 @@ def navigation_loop():
           gps=get_gps().get(),
           map_origin=_map_origin_cache.get("value"),
       )
-      if not is_auto_active() and pose_tracker.run_id:
-        DB.finish_run(pose_tracker.run_id, "stopped")
-        pose_tracker.run_id = None
-        current_run_id = None
       time.sleep(0.05)
     except Exception as exc:
       print(f"⚠️ Navigation update error: {exc}")
@@ -236,8 +230,8 @@ class SharedCameraStream:
 
     def _start_locked(self):
         command = [
-            "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "25",
-            "--inline", "-o", "-", "--width", "160", "--height", "120",
+            "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "50",
+            "--inline", "-o", "-", "--width", "640", "--height", "480",
             "--framerate", "4", "-n", "--denoise", "cdn_off",
         ]
         try:
@@ -402,29 +396,12 @@ def handle_water_pump(action=None):
     }
 
 def handle_auto_mode(action=None):
-    global current_run_id
     if action == "start":
         active = start_auto_mode()
-        if active and current_run_id is None:
-            area = DB.active_area()
-            current_run_id = DB.start_run(area["id"] if area else None)
-            pose_tracker.run_id = current_run_id
     elif action == "stop":
         active = stop_auto_mode()
-        if current_run_id is not None:
-            DB.finish_run(current_run_id, "stopped")
-            current_run_id = None
-            pose_tracker.run_id = None
     elif action == "toggle" or not action:
         active = toggle_auto_mode()
-        if active and current_run_id is None:
-            area = DB.active_area()
-            current_run_id = DB.start_run(area["id"] if area else None)
-            pose_tracker.run_id = current_run_id
-        elif not active and current_run_id is not None:
-            DB.finish_run(current_run_id, "stopped")
-            current_run_id = None
-            pose_tracker.run_id = None
     elif action == "status":
         active = is_auto_active()
     else:
@@ -1129,18 +1106,6 @@ def calibrate_imu_endpoint():
     reset_imu_heading()
     reset_compass_fusion()
     return jsonify({"success": ok, "imu": get_imu_snapshot(), "compass": get_compass_snapshot()}), (200 if ok else 503)
-
-
-@app.route('/api/telemetry', methods=['GET'])
-def navigation_history():
-    run_id = request.args.get('run_id', type=int)
-    limit = request.args.get('limit', default=500, type=int)
-    return jsonify({"success": True, "telemetry": DB.recent_telemetry(run_id, limit)}), 200
-
-
-@app.route('/api/runs', methods=['GET'])
-def navigation_runs():
-    return jsonify({"success": True, "runs": DB.recent_runs()}), 200
 
 # Orderly motor/pump stop on every exit path: atexit covers `python main.py`
 # and gunicorn's graceful worker stop; if the process is SIGKILLed instead,
