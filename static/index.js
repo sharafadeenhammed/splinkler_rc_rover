@@ -1,13 +1,23 @@
-const slider = document.getElementById("speedSlider");
+/* ══════════════════════════════════════════════════════════════════════
+   ROVER OS — command deck client
+   Protocol contract (unchanged from server):
+     WS  : telemetry | connection_ack | response | error
+           commands: ping, get_status, motor, pump, sensor_deploy,
+                     auto_mode, auto_speed, camera_tilt  (+ pin)
+     HTTP: /stream /sensor_readings /motor /deploy_sensor /water_pump
+           /auto_mode /auto_speed /camera_tilt
+           /api/areas/polygon /api/navigation/origin /api/imu/calibrate
+   ══════════════════════════════════════════════════════════════════════ */
+
+// ----------------- Element refs -----------------
+
+const speedSlider = document.getElementById("speedSlider");
 const statusTxt = document.getElementById("statusTxt");
-const targetVal = document.getElementById("targetVal");
 const forwardBtn = document.getElementById("forwardBtn");
 const reverseBtn = document.getElementById("reverseBtn");
 const rightBtn = document.getElementById("rightBtn");
 const leftBtn = document.getElementById("leftBtn");
 const stopBtn = document.getElementById("stopBtn");
-const sensorReadings = document.getElementById("sensorReadings");
-
 const valTemp = document.getElementById("valTemp");
 const valHumidity = document.getElementById("valHumidity");
 const valSoil = document.getElementById("valSoil");
@@ -20,10 +30,7 @@ const sidebar = document.getElementById("sidebar");
 const mobileBackdrop = document.getElementById("mobileBackdrop");
 const sidebarClock = document.getElementById("sidebarClock");
 const missionPercent = document.getElementById("missionPercent");
-const missionActionLabel = document.getElementById("missionActionLabel");
 const throttleOutput = document.getElementById("throttleOutput");
-
-// New Auto Config Elements
 const autoSpeedSlider = document.getElementById("autoSpeedSlider");
 const autoSpeedVal = document.getElementById("autoSpeedVal");
 const autoProgressText = document.getElementById("autoProgressText");
@@ -38,6 +45,17 @@ const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
 const valMag = document.getElementById("valMag");
 const pinInput = document.getElementById("roverPinInput");
+const compassNeedle = document.getElementById("compassNeedle");
+const headingDigits = document.getElementById("headingDigits");
+const headingSub = document.getElementById("headingSub");
+const compassState = document.getElementById("compassState");
+const compassChip = document.getElementById("compassChip");
+const motorBarL = document.getElementById("motorBarL");
+const motorBarR = document.getElementById("motorBarR");
+const motorPctL = document.getElementById("motorPctL");
+const motorPctR = document.getElementById("motorPctR");
+const motorDir = document.getElementById("motorDir");
+const driveMode = document.getElementById("driveMode");
 
 // Dynamic base URLs
 const baseURL = window.location.origin;
@@ -75,6 +93,8 @@ function roverFetch(url, opts = {}) {
   });
 }
 
+// ----------------- State -----------------
+
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
 let polygonDraft = [];
@@ -87,6 +107,8 @@ let roverMarker = null;
 let workAreaLayer = null;
 let draftLayer = null;
 let trailLayer = null;
+let baseLayer = null;
+let activeLayerKey = localStorage.getItem("roverMapLayer") || "streets";
 let loadedAreaId = null;
 let loadedOrigin = false;
 let lastGps = null;
@@ -109,16 +131,69 @@ const MAX_RECONNECT_DELAY_MS = 5000;
 // Initialize video feed source
 if (videoFeed) videoFeed.src = `${baseURL}/stream`;
 
-if (roverMap && window.L) {
-  leafletMap = L.map(roverMap, { zoomControl: true, scrollWheelZoom: true, wheelPxPerZoomLevel: 100 }).setView(mapOrigin, 18);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+// ----------------- Map: open layers -----------------
+// Tiles are fetched by the *browser*, so the Pi never needs internet.
+const MAP_LAYERS = {
+  streets: {
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(leafletMap);
-  workAreaLayer = L.polygon([], { color: "#38d9cf", weight: 2, fillColor: "#38d9cf", fillOpacity: 0.13 }).addTo(leafletMap);
+  },
+  topo: {
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    maxZoom: 17,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    maxZoom: 19,
+    attribution: 'Imagery &copy; <a href="https://www.esri.com">Esri</a>',
+  },
+};
+
+function setMapLayer(key) {
+  if (!leafletMap || !MAP_LAYERS[key]) return;
+  activeLayerKey = key;
+  localStorage.setItem("roverMapLayer", key);
+  if (baseLayer) {
+    leafletMap.removeLayer(baseLayer);
+    baseLayer = null;
+  }
+  const cfg = MAP_LAYERS[key];
+  // NOTE: never pass `subdomains: undefined` — Leaflet only splits the option
+  // when it is a string, and an explicit undefined overrides the "abc"
+  // default, which crashes _getSubdomain() on the first tile request.
+  baseLayer = L.tileLayer(cfg.url, { maxZoom: cfg.maxZoom, attribution: cfg.attribution });
+  baseLayer.addTo(leafletMap);
+  baseLayer.bringToBack();
+  document.querySelectorAll(".layer-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.layer === key);
+  });
+}
+
+document.querySelectorAll(".layer-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setMapLayer(btn.dataset.layer);
+    showToast(`Map style: ${btn.textContent.trim()}`);
+  });
+});
+
+if (roverMap && window.L) {
+  leafletMap = L.map(roverMap, { zoomControl: true, scrollWheelZoom: true, wheelPxPerZoomLevel: 100 }).setView(mapOrigin, 18);
+  setMapLayer(MAP_LAYERS[activeLayerKey] ? activeLayerKey : "streets");
+  workAreaLayer = L.polygon([], { color: "#39d9d0", weight: 2, fillColor: "#39d9d0", fillOpacity: 0.13 }).addTo(leafletMap);
   draftLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "5 5", fillColor: "#f2ba66", fillOpacity: 0.12 }).addTo(leafletMap);
-  trailLayer = L.polyline([], { color: "#a78bfa", weight: 3, opacity: 0.8 }).addTo(leafletMap);
-  roverMarker = L.marker(mapOrigin, { icon: L.divIcon({ className: "rover-map-marker", html: "<span>▲</span>", iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(leafletMap);
+  trailLayer = L.polyline([], { color: "#b59cff", weight: 3, opacity: 0.85 }).addTo(leafletMap);
+
+  const pinHtml =
+    '<div class="rover-pin"><i class="pin-pulse"></i>' +
+    '<svg width="16" height="16" viewBox="0 0 16 16">' +
+    '<path d="M8 1.5 L12.6 14 L8 10.6 L3.4 14 Z" fill="#05131a"/></svg></div>';
+  roverMarker = L.marker(mapOrigin, {
+    icon: L.divIcon({ className: "rover-map-marker", html: pinHtml, iconSize: [34, 34], iconAnchor: [17, 17] }),
+    zIndexOffset: 500,
+  }).addTo(leafletMap);
+
   leafletMap.on("click", (event) => {
     if (!mapDrawing || polygonDraft.length >= 128) return;
     polygonDraft.push([event.latlng.lat, event.latlng.lng]);
@@ -139,6 +214,19 @@ if (roverMap && window.L) {
     new ResizeObserver(reflowMap).observe(roverMap);
   }
 }
+
+// Compass rose minor ticks (30° steps, cardinal gaps left clear)
+(function buildRoseMinor() {
+  const group = document.getElementById("roseMinor");
+  if (!group) return;
+  for (let deg = 0; deg < 360; deg += 30) {
+    if (deg % 90 === 0) continue;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M100 12 v6");
+    path.setAttribute("transform", `rotate(${deg} 100 100)`);
+    group.appendChild(path);
+  }
+})();
 
 // ----------------- Video Feed Reconnection -----------------
 
@@ -310,44 +398,164 @@ function fetchSensorDataHttp() {
     .catch((err) => console.warn("HTTP Telemetry fetch error:", err));
 }
 
+// ----------------- Heading helpers -----------------
+// Pose/IMU heading is math-style (0° = east, counter-clockwise).  Compass
+// display is 0° = north, clockwise — convert once, use everywhere so the
+// rose, the digits and the map marker always agree.
+
+function compassDeg(mathDeg) {
+  return ((90 - mathDeg) % 360 + 360) % 360;
+}
+
+function renderHeading(data) {
+  // Primary: pose heading (map-true). Fallback: gyro integration.
+  let deg = null;
+  let sub = "waiting for pose";
+  if (data.pose && Number.isFinite(data.pose.heading_deg)) {
+    deg = compassDeg(data.pose.heading_deg);
+    const fusion = data.pose.fusion;
+    sub = fusion && fusion.gps_position ? "pose · gps fused"
+      : (fusion && fusion.mode === "odometry" ? "pose · enc+imu" : "pose · map true");
+  } else if (data.imu && data.imu.available && Number.isFinite(data.imu.heading_deg)) {
+    deg = compassDeg(data.imu.heading_deg);
+    sub = "gyro relative";
+  }
+
+  if (deg === null) {
+    if (headingDigits) headingDigits.innerText = "---°";
+  } else {
+    if (compassNeedle) compassNeedle.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+    if (headingDigits) headingDigits.innerText = `${String(Math.round(deg) % 360).padStart(3, "0")}°`;
+  }
+  if (headingSub) headingSub.innerText = sub;
+
+  const mag = data.compass;
+  if (!mag) return;
+  if (mag.available) {
+    if (valMag) {
+      valMag.innerText = `${(mag.heading_deg || 0).toFixed(0)}°`;
+      valMag.classList.toggle("fused", !!mag.fusion_active);
+    }
+    if (compassState) {
+      compassState.innerText = mag.fusion_active ? "FUSED" : "MAG";
+      compassState.className = `fuse-chip ${mag.fusion_active ? "fused" : "mag"}`;
+    }
+  } else {
+    if (valMag) {
+      valMag.innerText = "--";
+      valMag.classList.remove("fused");
+    }
+    if (compassState) {
+      compassState.innerText = "NO MAG";
+      compassState.className = "fuse-chip off";
+    }
+  }
+  if (compassChip) {
+    compassChip.innerText = mag.chip
+      ? `${mag.chip}${mag.i2c_errors ? ` · I2C ${mag.i2c_errors}` : ""}`
+      : "";
+  }
+}
+
+// ----------------- Motor drive bars -----------------
+// Real wheel duty comes from telemetry (auto-mode PID and, when the backend
+// reports it, manual commands too).  While a drive key is held we overlay the
+// commanded value so the bars react instantly, without waiting for telemetry.
+
+function predictedDrive() {
+  const s = targetSpeed / 100;
+  switch (activeDirection) {
+    case "forward": return [s, s];
+    case "reverse": return [-s, -s];
+    case "left": return [-s, s];
+    case "right": return [s, -s];
+    default: return null;
+  }
+}
+
+function driveLabel(left, right, moving) {
+  if (!moving) return "STOPPED";
+  const eps = 0.02;
+  const L = left > eps ? 1 : left < -eps ? -1 : 0;
+  const R = right > eps ? 1 : right < -eps ? -1 : 0;
+  if (L === R) {
+    if (L > 0) return "FORWARD";
+    if (L < 0) return "REVERSE";
+    return "STOPPED";
+  }
+  if (L === 0 || R === 0) return "ARC";
+  return L > 0 ? "PIVOT RIGHT" : "PIVOT LEFT";
+}
+
+function paintTrack(fill, pctText, duty, turning) {
+  if (!fill) return;
+  const clamped = Math.max(-1, Math.min(1, duty || 0));
+  const width = Math.abs(clamped) * 50; // % of full rail: half per direction
+  fill.style.width = `${width.toFixed(1)}%`;
+  fill.style.left = clamped >= 0 ? "50%" : `${(50 - width).toFixed(1)}%`;
+  fill.classList.toggle("rev", clamped < 0 && !turning);
+  fill.classList.toggle("turn", turning);
+  if (pctText) pctText.innerText = `${Math.round(Math.abs(clamped) * 100)}%`;
+}
+
+function renderMotorDrive(data) {
+  let left = 0;
+  let right = 0;
+  const predicted = predictedDrive();
+  const usingCommand = predicted !== null;
+
+  if (usingCommand) {
+    [left, right] = predicted;
+  } else if (data.motor_drive && Number.isFinite(data.motor_drive.left)) {
+    left = data.motor_drive.left || 0;
+    right = data.motor_drive.right || 0;
+  }
+
+  const moving = Math.abs(left) > 0.02 || Math.abs(right) > 0.02;
+  const turning = moving && Math.sign(left) !== Math.sign(right);
+
+  paintTrack(motorBarL, motorPctL, left, turning);
+  paintTrack(motorBarR, motorPctR, right, turning);
+
+  if (motorDir) {
+    const label = driveLabel(left, right, moving);
+    motorDir.innerText = label;
+    motorDir.className = "drive-dir"
+      + (label === "FORWARD" || label === "REVERSE" || label === "ARC" ? " run" : "")
+      + (label.startsWith("PIVOT") ? " turning" : "")
+      + (label === "REVERSE" ? " rev" : "");
+    if (!moving) motorDir.className = "drive-dir";
+  }
+  if (driveMode) {
+    const mode = data.auto_active ? "AUTO" : (usingCommand ? "MANUAL" : "IDLE");
+    driveMode.innerText = mode;
+    driveMode.className = `drive-mode${mode === "IDLE" ? "" : " run"}`;
+  }
+}
+
 // ----------------- Telemetry Renderer -----------------
 
 function renderTelemetry(data) {
   if (!data) return;
 
-  if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
-  if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
-  if (valSoil) valSoil.innerText = data.soil || 'Dry';
-  if (valDist) valDist.innerText = data.distance_cm !== undefined ? `${data.distance_cm} cm` : '--';
-  if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : '0';
-  if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : '0';
-
-  if (data.compass && valMag) {
-    if (data.compass.available) {
-      valMag.innerText = `${(data.compass.heading_deg || 0).toFixed(0)}\u00b0`;
-      valMag.classList.toggle("fused", !!data.compass.fusion_active);
-    } else {
-      valMag.innerText = "--";
-      valMag.classList.remove("fused");
-    }
+  if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : "--";
+  if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : "--";
+  if (valSoil) valSoil.innerText = data.soil || "Dry";
+  if (valDist) {
+    const dist = data.distance_cm;
+    valDist.innerText = dist !== undefined && dist !== null ? `${dist} cm` : "-- cm";
+    valDist.classList.toggle("alert", Number(dist) > 0 && Number(dist) <= 20);
   }
+  if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : "0";
+  if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : "0";
+
   if (pinInput && data.pin_required !== undefined) {
     pinInput.hidden = !data.pin_required;
   }
-
-  if (sensorReadings) {
-    sensorReadings.innerHTML = `
-      <p>Temp: ${data.temperature}°C</p>
-      <p>Humidity: ${data.humidity}%</p>
-      <p>Soil: ${data.soil}</p>
-      <p>Dist: ${data.distance_cm}cm</p>
-    `;
-  }
-
   if (data.pump_active !== undefined) updatePumpUI(data.pump_active);
   if (data.sensor_deployed !== undefined) updateSensorUI(data.sensor_deployed);
   if (data.auto_active !== undefined) updateAutoUI(data.auto_active);
-  
+
   if (data.motor_status !== undefined && statusTxt) {
     statusTxt.innerText = data.motor_status;
   }
@@ -355,10 +563,8 @@ function renderTelemetry(data) {
     const angleElem = document.getElementById("current-angle");
     if (angleElem) angleElem.innerText = data.camera_angle;
   }
-  
-  if (data.auto_progress) {
-    updateAutoProgressUI(data.auto_progress);
-  }
+
+  if (data.auto_progress) updateAutoProgressUI(data.auto_progress);
   if (data.gps) updateGpsReadout(data.gps);
   if (data.pose) renderRoverMap(data.pose, data.active_area);
   if (leafletMap && !mapViewBootstrapped) {
@@ -387,10 +593,12 @@ function renderTelemetry(data) {
     if (yawEl) yawEl.innerText = yaw.toFixed(1);
     const model = document.getElementById("rover3dModel");
     if (model) {
-      // CSS 3D transform mapping
       model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg) rotateZ(${-yaw}deg)`;
     }
   }
+
+  renderHeading(data);
+  renderMotorDrive(data);
 }
 
 function updateGpsReadout(gps) {
@@ -529,12 +737,23 @@ function renderRoverMap(pose, area) {
       loadedAreaId = area.id;
     }
   }
+
   const roverGeo = localToGeo(pose.x_m, pose.y_m);
   roverMarker.setLatLng(roverGeo);
-  roverMarker.setIcon(L.divIcon({ className: "rover-map-marker", html: `<span style="transform:rotate(${90 - (pose.heading_deg || 0)}deg)">▲</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }));
+
+  // Rotate the pin arrow so the marker shows where the nose actually points.
+  const markerEl = roverMarker.getElement();
+  if (markerEl) {
+    const arrow = markerEl.querySelector("svg");
+    if (arrow && Number.isFinite(pose.heading_deg)) {
+      arrow.style.transform = `rotate(${compassDeg(pose.heading_deg).toFixed(1)}deg)`;
+    }
+  }
+
   trailPoints.push(roverGeo);
   if (trailPoints.length > 200) trailPoints.shift();
   trailLayer.setLatLngs(trailPoints);
+
   if (poseText) {
     let label = `${pose.x_m.toFixed(1)}m, ${pose.y_m.toFixed(1)}m · ${pose.heading_deg.toFixed(0)}°`;
     const fusion = pose.fusion;
@@ -692,7 +911,6 @@ function updateAutoUI(isAutoActive) {
       if (modeTxt) modeTxt.innerText = "MANUAL 🎮";
     }
   }
-  if (missionActionLabel) missionActionLabel.innerText = isAutoActive ? "Stop autonomous mission" : "Start autonomous mission";
 }
 
 // ----------------- Command Handlers (WS with HTTP Fallback) -----------------
@@ -790,14 +1008,14 @@ function updateAutoSpeed() {
 
 // ----------------- Slider & Input Controls -----------------
 
-if (slider) {
-  slider.oninput = function () {
+if (speedSlider) {
+  speedSlider.oninput = function () {
     targetSpeed = this.value;
-    if (targetVal) targetVal.innerHTML = targetSpeed;
     if (throttleOutput) throttleOutput.innerText = `${targetSpeed}%`;
     if (activeDirection) {
       sendHardwareCommand(targetSpeed, activeDirection);
     }
+    renderMotorDrive({});
   };
 }
 
@@ -848,6 +1066,7 @@ function setupButton(buttonElement, directionName) {
     if (!activeDirection) {
       activeDirection = directionName;
       sendHardwareCommand(targetSpeed, directionName);
+      renderMotorDrive({});
     }
   };
 
@@ -856,6 +1075,7 @@ function setupButton(buttonElement, directionName) {
     if (activeDirection === directionName) {
       activeDirection = null;
       sendHardwareCommand(0, "stop");
+      renderMotorDrive({});
     }
   };
 
@@ -878,6 +1098,7 @@ if (stopBtn) {
     e.preventDefault();
     activeDirection = null;
     sendHardwareCommand(0, "stop");
+    renderMotorDrive({});
   });
 }
 
@@ -891,25 +1112,30 @@ document.addEventListener("keydown", (event) => {
     if (!activeDirection) {
       activeDirection = "forward";
       sendHardwareCommand(targetSpeed, "forward");
+      renderMotorDrive({});
     }
   } else if (key === "arrowdown" || key === "s") {
     if (!activeDirection) {
       activeDirection = "reverse";
       sendHardwareCommand(targetSpeed, "reverse");
+      renderMotorDrive({});
     }
   } else if (key === "arrowleft" || key === "a") {
     if (!activeDirection) {
       activeDirection = "left";
       sendHardwareCommand(targetSpeed, "left");
+      renderMotorDrive({});
     }
   } else if (key === "arrowright" || key === "d") {
     if (!activeDirection) {
       activeDirection = "right";
       sendHardwareCommand(targetSpeed, "right");
+      renderMotorDrive({});
     }
   } else if (key === " " || key === "spacebar") {
     activeDirection = null;
     sendHardwareCommand(0, "stop");
+    renderMotorDrive({});
   } else if (key === "c") {
     tiltCamera("center");
   } else if (key === "e" || key === "m") {
@@ -933,6 +1159,7 @@ document.addEventListener("keyup", (event) => {
   ) {
     activeDirection = null;
     sendHardwareCommand(0, "stop");
+    renderMotorDrive({});
   }
 });
 
@@ -940,6 +1167,7 @@ window.addEventListener("blur", () => {
   if (activeDirection) {
     activeDirection = null;
     sendHardwareCommand(0, "stop");
+    renderMotorDrive({});
   }
 });
 
@@ -951,10 +1179,9 @@ window.addEventListener("beforeunload", () => {
   if (ws) {
     try {
       ws.close();
-    } catch (_) {}
+    } catch (_) { /* ignore */ }
   }
 });
 
 // Initialize WebSocket on page load
 initWebSocket();
-
