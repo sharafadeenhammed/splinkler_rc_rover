@@ -138,6 +138,13 @@ def set_imu_heading_rad(heading_rad):
         MPU.last_update = time.monotonic()
 
 
+def apply_heading_correction(correction_rad):
+    """Nudge the integrated heading by an externally computed correction
+    (e.g. compass-estimated gyro drift) without touching the update clock."""
+    with MPU._lock:
+        MPU.heading_rad = (MPU.heading_rad + float(correction_rad) + math.pi) % (2 * math.pi) - math.pi
+
+
 __all__ = [
     "MPU",
     "get_imu_snapshot",
@@ -145,4 +152,5 @@ __all__ = [
     "calibrate_imu",
     "reset_imu_heading",
     "set_imu_heading_rad",
+    "apply_heading_correction",
 ]

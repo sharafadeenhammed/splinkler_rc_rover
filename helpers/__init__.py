@@ -3,7 +3,6 @@ from .dht11 import *
 from .servo_controller import *
 from .moisture_controller import *
 from .pump_controller import *
-from .vision_controller import *
 from .ultrasonic_controller import *
 from .auto_controller import *
 from .encoder_controller import *

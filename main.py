@@ -8,7 +8,9 @@ import json
 import select
 import math
 import atexit
+import functools
 import gc
+import hmac
 
 # Line-buffer stdout: under systemd stdout is a journald socket and print()
 # output stays block-buffered for hours, hiding the memory watchdog's alerts
@@ -56,7 +58,7 @@ from helpers import (
     forward, reverse, turnRight, turnLeft, stop,
     readHumidityAndTemp, camera_servo, sensor_servo,
     MOISTURE_SENSOR, WATER_PUMP,
-    get_distance_cm, set_latest_frame, get_vision_status,
+    get_distance_cm,
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed,
@@ -65,6 +67,10 @@ from helpers import (
 )
 from helpers.mpu6050 import (
     get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading, set_imu_heading_rad,
+    apply_heading_correction,
+)
+from helpers.hmc5883l import (
+    get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
 from helpers.pose_fusion import gps_heading_usable
 from helpers.gps_controller import get_gps
@@ -73,6 +79,31 @@ from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_W
 
 app = Flask(__name__)
 sock = Sock(app) if HAS_SOCK else None
+
+# Optional command PIN: when ROVER_PIN is set in the service environment, the
+# six control endpoints (drive, auto, probe, pump, camera pan, auto speed)
+# and their WebSocket equivalents demand it; an empty value keeps the old
+# open behaviour.  The dashboard reads pin_required from telemetry and shows
+# the PIN field only when it is enforced.
+ROVER_PIN = os.environ.get("ROVER_PIN", "").strip()
+_PROTECTED_WS_COMMANDS = {"motor", "sensor_deploy", "pump", "auto_mode", "auto_speed", "camera_tilt"}
+
+
+def _pin_ok(supplied=None):
+    if not ROVER_PIN:
+        return True
+    if supplied is None:  # HTTP route: header first, query param as fallback
+        supplied = request.headers.get("X-Rover-Pin", "") or request.args.get("pin", "")
+    return hmac.compare_digest(str(supplied).strip(), ROVER_PIN)
+
+
+def pin_required(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _pin_ok():
+            return jsonify({"success": False, "error": "PIN required"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
 
 camera_current_angle = 0
 sensor_servo_deployed = False
@@ -118,7 +149,13 @@ def navigation_loop():
   print("🧭 Navigation loop started.")
   while True:
     try:
+      compass = update_compass()
       imu = update_imu()
+      if compass.get("available") and imu.get("available"):
+        correction = compass_drift_correction(imu["heading_rad"])
+        if correction:
+          apply_heading_correction(correction)
+          imu = get_imu_snapshot()
       left_ticks, right_ticks = get_encoder_ticks()
       pose_tracker.update(
           left_ticks, right_ticks, imu,
@@ -214,11 +251,11 @@ class SharedCameraStream:
 
     def _reader(self, process):
         buffer = bytearray()
-        last_vision = 0.0
         try:
             while process.poll() is None:
                 with self.lock:
-                    idle = self.clients == 0 and time.monotonic() - self.last_client_at > 5.0
+                    idle = (self.clients == 0
+                            and time.monotonic() - self.last_client_at > 5.0)
                 if idle:
                     break
                 ready, _, _ = select.select([process.stdout], [], [], 0.5)
@@ -246,10 +283,6 @@ class SharedCameraStream:
                         self.frame = frame
                         self.sequence += 1
                         self.condition.notify_all()
-                    now = time.monotonic()
-                    if now - last_vision >= 1.0:
-                        set_latest_frame(frame)
-                        last_vision = now
         except (OSError, ValueError) as exc:
             print(f"Camera stream ended: {exc}")
         finally:
@@ -441,7 +474,6 @@ def get_telemetry_payload():
     payload["sensor_angle"] = sensor_servo.angle
     payload["distance_cm"] = get_distance_cm()
     payload["ultrasonic_enabled"] = is_ultrasonic_enabled()
-    payload["vision_status"] = get_vision_status()
     payload["auto_active"] = is_auto_active()
     payload["auto_progress"] = get_auto_progress()
     payload["motor_status"] = motor_status
@@ -451,11 +483,13 @@ def get_telemetry_payload():
     payload["encoder_right"] = rt
     payload["encoder_config"] = encoder_config()
     payload["imu"] = get_imu_snapshot()
+    payload["compass"] = get_compass_snapshot()
     payload["pose"] = pose_tracker.snapshot()
     payload["active_area"] = cached_active_area()
     payload["map_origin"] = _map_origin_cache["value"]
     payload["gps"] = get_gps().get()
     payload["memory"] = read_meminfo()
+    payload["pin_required"] = bool(ROVER_PIN)
     payload["success"] = True
     return payload
 
@@ -477,6 +511,7 @@ def apply_navigation_origin(latitude, longitude, source="manual"):
         heading_rad = 0.0
     pose_tracker.reset(0.0, 0.0, heading_rad)
     set_imu_heading_rad(heading_rad)
+    reset_compass_fusion()
     return {
         "map_origin": [latitude, longitude],
         "source": source,
@@ -753,13 +788,14 @@ def ws_telemetry_broadcast_loop():
         except Exception as e:
             time.sleep(1.0)
 
-# Mount background tasks on server start.  The lock prevents duplicate loops
-# when the dashboard fires several first requests at once (page + /stream +
-# telemetry + WS connect), which would waste CPU and memory on this board.
+# Background loops start exactly once, at module import — covering both
+# `python main.py` and a WSGI server (gunicorn imports main:app without ever
+# running __main__), so telemetry needs no HTTP request to exist.
+# NOTE: the camera vision-analysis pipeline was removed entirely (CPU/memory
+# load on the Pi Zero W); obstacle detection is ultrasonic-only now.
 _threads_lock = threading.Lock()
 
-@app.before_request
-def initialize_background_threads():
+def start_background_threads():
     with _threads_lock:
         if not getattr(app, 'sensor_thread_started', False):
             bg_thread = threading.Thread(target=read_sensor_loop, daemon=True)
@@ -780,6 +816,17 @@ def initialize_background_threads():
             ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
             ws_thread.start()
             app.ws_broadcast_started = True
+
+
+@app.after_request
+def set_static_cache_headers(response):
+    """Cache static assets for a day: over the rover's flaky Wi-Fi the
+    dashboard was re-downloading css/js on every single page load."""
+    if request.path.startswith("/static/"):
+        # Overwrite (not setdefault): Flask's default is `no-cache`, which
+        # would otherwise win and keep the css/js re-downloading every load.
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
 
 # WebSocket Endpoint
 if HAS_SOCK:
@@ -838,6 +885,13 @@ if HAS_SOCK:
                     data = json.loads(msg) if isinstance(msg, str) else json.loads(msg.decode('utf-8'))
                     cmd_type = data.get("type")
                     response = {"type": "response", "success": True, "command": cmd_type}
+
+                    if cmd_type in _PROTECTED_WS_COMMANDS and not _pin_ok(data.get("pin")):
+                        response["success"] = False
+                        response["error"] = "PIN required"
+                        response["message"] = "PIN required — set it in the sidebar"
+                        client.send(json.dumps(response))
+                        continue
 
                     if cmd_type == "motor":
                         speed = data.get("speed", 0)
@@ -916,6 +970,7 @@ def home():
     return render_template("index.html")
 
 @app.route('/motor', methods=['GET'])
+@pin_required
 def control_motor():
     try:
         speed = request.args.get('speed', 0)
@@ -938,6 +993,7 @@ def control_ultrasonic():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/auto_mode', methods=['GET', 'POST'])
+@pin_required
 def control_auto_mode():
     action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
     res = handle_auto_mode(action)
@@ -945,6 +1001,7 @@ def control_auto_mode():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/deploy_sensor', methods=['GET', 'POST'])
+@pin_required
 def deploy_sensor():
     action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
     res = handle_sensor_deploy(action)
@@ -952,6 +1009,7 @@ def deploy_sensor():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/water_pump', methods=['GET', 'POST'])
+@pin_required
 def control_pump():
     action = request.args.get('action') or (request.json.get('action') if request.is_json else None)
     res = handle_water_pump(action)
@@ -959,6 +1017,7 @@ def control_pump():
     return jsonify({"success": True, **res}), 200
 
 @app.route('/camera_tilt', methods=['GET'])
+@pin_required
 def tilt_camera():
     direction = request.args.get('direction')
     if not direction:
@@ -971,6 +1030,7 @@ def tilt_camera():
     return jsonify({"status": "success", "current_angle": angle})
 
 @app.route('/auto_speed', methods=['GET', 'POST'])
+@pin_required
 def set_auto_speed_endpoint():
     speed_pct = (request.args.get('speed_pct') or
                  (request.json.get('speed_pct') if request.is_json else None) or 70)
@@ -1060,7 +1120,8 @@ def calibrate_imu_endpoint():
         return jsonify({"success": False, "error": "Stop the rover before calibrating the MPU6050"}), 409
     ok = calibrate_imu()
     reset_imu_heading()
-    return jsonify({"success": ok, "imu": get_imu_snapshot()}), (200 if ok else 503)
+    reset_compass_fusion()
+    return jsonify({"success": ok, "imu": get_imu_snapshot(), "compass": get_compass_snapshot()}), (200 if ok else 503)
 
 
 @app.route('/api/telemetry', methods=['GET'])
@@ -1074,11 +1135,16 @@ def navigation_history():
 def navigation_runs():
     return jsonify({"success": True, "runs": DB.recent_runs()}), 200
 
+# Orderly motor/pump stop on every exit path: atexit covers `python main.py`
+# and gunicorn's graceful worker stop; if the process is SIGKILLed instead,
+# deploy/rover.service's ExecStopPost runs deploy/emergency_stop.py.
+atexit.register(_atexit_stop)
+start_background_threads()
+
 if __name__ == '__main__':
-    # Cut motors/pump on any orderly exit.  If the OOM killer SIGKILLs this
-    # process instead, deploy/rover.service's ExecStopPost runs
-    # deploy/emergency_stop.py as the backstop.
-    atexit.register(_atexit_stop)
+    # Manual/dev run via Werkzeug.  Production uses gunicorn (see
+    # deploy/gunicorn.conf.py), which never executes this block — its worker
+    # runs the atexit handlers above on graceful stop instead.
     signal.signal(signal.SIGTERM, _sigterm_handler)
     # host='0.0.0.0' exposes the server to your entire local network (Wi-Fi/LAN)
     # threaded=True allows multiple backend connections without blocking
