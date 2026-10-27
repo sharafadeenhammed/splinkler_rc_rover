@@ -465,6 +465,7 @@ def _obstacle_check() -> bool:
 
 def _evade_obstacle():
     """Reverse slightly then turn away from the detected obstacle side."""
+    global _evasion_side
     print("🚨 Obstacle! Executing evasive manoeuvre...")
     auto_progress["phase"] = "obstacle"
     stop()
