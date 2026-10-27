@@ -34,6 +34,7 @@
         <section class="manual-dock" id="manualDock" aria-label="Manual drive controls">
           <div class="manual-dock-head"><span class="manual-dock-label">Manual drive</span><span class="control-hint compact">Hold buttons or WASD · Space stops</span></div>
           <div class="manual-speed"><span>Speed</span><input type="range" min="0" max="100" value="50" class="speed-slider" id="speedSlider" aria-label="Manual drive speed"><output id="throttleOutput">50%</output><b id="targetVal" hidden>50</b></div>
+          <div class="instrument-row">
           <div class="orientation-panel" aria-label="Vehicle heading">
             <div class="compass-head"><small>HEADING</small><b id="headingDigits">---°</b></div>
             <div class="compass-face">
@@ -47,28 +48,38 @@
                 <text x="34" y="100" class="cc-cardinal">W</text>
               </svg>
               <span class="lubber-line" aria-hidden="true"></span>
-              <div class="rover-stage">
-                <div class="ground-shadow"></div>
-                <div class="rover-3d-model" id="rover3dModel">
-                  <span class="face c-top"></span>
-                  <span class="face c-bottom"></span>
-                  <span class="face c-front"></span>
-                  <span class="face c-back"></span>
-                  <span class="face c-left"></span>
-                  <span class="face c-right"></span>
-                  <span class="deck"></span>
-                  <span class="dome"></span>
-                  <span class="rail rail-l"></span>
-                  <span class="rail rail-r"></span>
-                  <span class="bar b-front"></span>
-                  <span class="bar b-back"></span>
-                  <div class="wheel w-fl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                  <div class="wheel w-fr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                  <div class="wheel w-rl"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                  <div class="wheel w-rr"><span class="cap out"></span><span class="cap in"></span><span class="slice s1"></span><span class="slice s2"></span><span class="slice s3"></span></div>
-                </div>
-              </div>
+              <svg class="heading-arrow" viewBox="0 0 200 200" aria-hidden="true">
+                <path class="ha-head" d="M100 20 L114 56 L100 47 L86 56 Z"/>
+                <rect class="ha-shaft" x="96.5" y="47" width="7" height="53" rx="3.5"/>
+                <circle class="ha-hub" cx="100" cy="100" r="7"/>
+                <circle class="ha-hub-dot" cx="100" cy="100" r="2.5"/>
+              </svg>
             </div>
+          </div>
+          <div class="imu-panel" aria-label="IMU orientation">
+            <div class="compass-head"><small>IMU ATTITUDE</small><b id="imuDigits">P +0.0° R +0.0°</b></div>
+            <div class="imu-face">
+              <svg class="imu-sprite" viewBox="0 0 120 120" aria-hidden="true">
+                <defs><clipPath id="imuClip"><circle cx="60" cy="60" r="46"/></clipPath></defs>
+                <g id="imuHorizon" clip-path="url(#imuClip)">
+                  <rect x="-70" y="-130" width="260" height="130" class="imu-sky"/>
+                  <rect x="-70" y="0" width="260" height="130" class="imu-ground"/>
+                  <line x1="-70" y1="0" x2="190" y2="0" class="imu-horizon-line"/>
+                  <line x1="45" y1="-16" x2="75" y2="-16" class="imu-ladder"/>
+                  <line x1="50" y1="-32" x2="70" y2="-32" class="imu-ladder"/>
+                  <line x1="45" y1="16" x2="75" y2="16" class="imu-ladder"/>
+                  <line x1="50" y1="32" x2="70" y2="32" class="imu-ladder"/>
+                </g>
+                <circle cx="60" cy="60" r="46" class="imu-glass"/>
+                <circle cx="60" cy="60" r="51" class="imu-bezel"/>
+                <g class="imu-ref">
+                  <path d="M24 60 H46 M74 60 H96"/>
+                  <path d="M46 60 L52 67 M74 60 L68 67"/>
+                  <circle cx="60" cy="60" r="3.5"/>
+                </g>
+              </svg>
+            </div>
+          </div>
           </div>
           <div class="drive-pad drive-pad--dock">
             <button type="button" class="drive-key up" id="forwardBtn" aria-label="Forward">▲</button>

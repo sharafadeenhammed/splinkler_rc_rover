@@ -3,11 +3,35 @@
 The MPU6050 has no magnetometer, so heading is relative to the heading at
 startup/calibration and will slowly drift.  It is still useful for correcting
 short straight runs when combined with wheel encoders.
+
+Noise handling (measured on the rover, motors off):
+  * gyro-Z carries a warm-up bias of ~0.27 deg/s, which walked the heading
+    ~16 deg/min while parked - the "80 deg to 54 deg while stationary" bug.
+  * the raw rate has ~0.14 deg/s of white noise and pitch/roll jitter of
+    ~0.7 deg peak-to-peak.
+So the rate is low-passed before integration, a still gate freezes the
+heading (and slowly re-learns the bias) whenever the rover is parked, and
+pitch/roll get a display-side EMA.
 """
 
 import math
+import os
 import threading
 import time
+
+# Still gate: |gyro-Z rate| below this (deg/s) counts as stationary.  Sized
+# from the measured bias+noise envelope (0.27 +/- 0.14 dps, peaks to 0.7).
+STILL_DPS = float(os.environ.get("IMU_STILL_DPS", "1.0"))
+# Consecutive 20 Hz ticks inside the deadband before the gate engages
+# (10 ticks = 0.5 s), so a slow nudge is never mistaken for parking.
+STILL_TICKS = int(os.environ.get("IMU_STILL_TICKS", "10"))
+# Adaptive bias tracking while gated: cancels the warm-up/thermal drift with a
+# ~5 s time constant at 20 Hz instead of letting it integrate into heading.
+BIAS_ALPHA = float(os.environ.get("IMU_BIAS_ALPHA", "0.01"))
+# Low-pass weight for the integrated gyro rate (kills single-sample spikes).
+RATE_ALPHA = 0.25
+# Low-pass weight for the displayed pitch/roll attitude.
+ATT_ALPHA = 0.15
 
 
 class MPU6050:
@@ -31,6 +55,9 @@ class MPU6050:
         self.last_update = None
         self._i2c_errors = 0
         self._lock = threading.RLock()
+        # Filter state.
+        self._rate_f = 0.0        # low-passed gyro rate actually integrated
+        self._still_ticks = 0     # consecutive ticks inside the still band
 
         try:
             try:
@@ -86,13 +113,32 @@ class MPU6050:
             return self.snapshot()
         self._i2c_errors = 0
         with self._lock:
-            if self.last_update is not None:
-                dt = min(0.1, max(0.0, now - self.last_update))
-                self.heading_rad = (self.heading_rad + math.radians(gyro[2] - self.gyro_bias_z) * dt + math.pi) % (2 * math.pi) - math.pi
+            rate = gyro[2] - self.gyro_bias_z
+            if abs(rate) <= STILL_DPS:
+                self._still_ticks += 1
+            else:
+                self._still_ticks = 0
+
+            if self._still_ticks >= STILL_TICKS:
+                # Parked: freeze the heading so noise cannot random-walk it,
+                # and slowly drag the bias to the current reading so the
+                # warm-up drift is gone by the next time the rover moves.
+                self.gyro_bias_z += BIAS_ALPHA * (gyro[2] - self.gyro_bias_z)
+                self._rate_f = 0.0
+                self.gyro_z_dps = 0.0
+            else:
+                self._rate_f = RATE_ALPHA * rate + (1.0 - RATE_ALPHA) * self._rate_f
+                self.gyro_z_dps = self._rate_f
+                if self.last_update is not None:
+                    dt = min(0.1, max(0.0, now - self.last_update))
+                    self.heading_rad = (self.heading_rad + math.radians(self._rate_f) * dt + math.pi) % (2 * math.pi) - math.pi
+
             self.last_update = now
-            self.gyro_z_dps = gyro[2] - self.gyro_bias_z
-            self.roll_deg = math.degrees(math.atan2(accel[1], accel[2]))
-            self.pitch_deg = math.degrees(math.atan2(-accel[0], math.hypot(accel[1], accel[2])))
+            # Attitude for the display: EMA smooths the ~0.7 deg jitter.
+            roll = math.degrees(math.atan2(accel[1], accel[2]))
+            pitch = math.degrees(math.atan2(-accel[0], math.hypot(accel[1], accel[2])))
+            self.roll_deg = ATT_ALPHA * roll + (1.0 - ATT_ALPHA) * self.roll_deg
+            self.pitch_deg = ATT_ALPHA * pitch + (1.0 - ATT_ALPHA) * self.pitch_deg
         return self.snapshot()
 
     def reset_heading(self):

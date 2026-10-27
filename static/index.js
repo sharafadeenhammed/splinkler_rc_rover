@@ -327,9 +327,10 @@ function fetchSensorDataHttp() {
 }
 
 // ----------------- Compass instrument -----------------
-// Aviation pattern: the vehicle crate stays fixed in the middle, the card
-// rotates behind it under a fixed lubber line.  Pose/IMU heading is math
-// style (0° = east, CCW); the compass shows 0° = north, clockwise.
+// Aviation pattern: the heading arrow stays fixed pointing up (the
+// vehicle's nose) while the card rotates behind it under the lubber line.
+// Pose/IMU heading is math style (0° = east, CCW); the compass shows
+// 0° = north, clockwise.
 
 let compassRotation = 0;
 let compassPrev = null;
@@ -420,12 +421,19 @@ function renderTelemetry(data) {
   }
 
   if (data.imu) {
-    const pitch = data.imu.pitch_deg || 0;
-    const roll = data.imu.roll_deg || 0;
-    const model = document.getElementById("rover3dModel");
-    if (model) {
-      // Attitude only — heading lives on the compass card now.
-      model.style.transform = `rotateX(${-pitch}deg) rotateY(${roll}deg)`;
+    const pitch = Number.isFinite(data.imu.pitch_deg) ? data.imu.pitch_deg : 0;
+    const roll = Number.isFinite(data.imu.roll_deg) ? data.imu.roll_deg : 0;
+    // Standalone attitude sprite: the horizon ball tilts with roll and
+    // slides with pitch; the fixed aircraft glyph is the reference.
+    const horizon = document.getElementById("imuHorizon");
+    if (horizon) {
+      const pitchPx = Math.max(-40, Math.min(40, pitch)) * 1.1;
+      horizon.setAttribute("transform", `translate(0 ${pitchPx}) rotate(${-roll} 60 60)`);
+    }
+    const imuDigits = document.getElementById("imuDigits");
+    if (imuDigits) {
+      const fmt = (v) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}°`;
+      imuDigits.innerText = `P ${fmt(pitch)} R ${fmt(roll)}`;
     }
   }
   updateCompass(data);

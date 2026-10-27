@@ -35,6 +35,13 @@ MIN_TURN_RAD = 0.8
 # Clamp so a misbehaving magnetometer can never yank the heading around
 # faster than this (radians per 20 Hz tick).
 MAX_STEP_RAD = 0.01
+# A single-sample jump larger than this (degrees) is treated as a bus glitch
+# until several consecutive readings agree on the new value.  A real pivot
+# stays well below 15 deg per 20 Hz tick (75 deg/s), while the observed
+# glitch was a 26 deg instant hop.
+SPIKE_LIMIT_RAD = math.radians(float(os.environ.get("COMPASS_SPIKE_DEG", "15")))
+# Consecutive agreeing samples needed before a large jump is accepted.
+SPIKE_CONFIRM = int(os.environ.get("COMPASS_SPIKE_CONFIRM", "3"))
 
 
 class Compass:
@@ -73,6 +80,9 @@ class Compass:
         self._agreement = 0.0       # accumulated gyro*compass step products
         self._ref_imu = None        # comparison baseline once fusion starts
         self._ref_mag = None
+        # Spike-rejection state for large single-sample jumps.
+        self._pending_rad = None
+        self._pending_hits = 0
 
         if not COMPASS_ENABLED:
             self.error = "compass disabled by COMPASS_ENABLED"
@@ -173,9 +183,28 @@ class Compass:
                 self._seeded = True
             else:
                 delta = normalize_angle_rad(measured - self.heading_rad)
-                self.heading_rad = normalize_angle_rad(
-                    self.heading_rad + COMPASS_SMOOTH_ALPHA * delta
-                )
+                if abs(delta) <= SPIKE_LIMIT_RAD:
+                    self.heading_rad = normalize_angle_rad(
+                        self.heading_rad + COMPASS_SMOOTH_ALPHA * delta
+                    )
+                    self._pending_rad = None
+                    self._pending_hits = 0
+                else:
+                    # Suspicious jump (glitch, or a genuine very fast turn):
+                    # hold the last good heading until SPIKE_CONFIRM consecutive
+                    # readings agree with each other, then adopt it.  A lone
+                    # bad I2C read therefore never moves the needle.
+                    if self._pending_rad is not None and abs(
+                        normalize_angle_rad(measured - self._pending_rad)
+                    ) <= SPIKE_LIMIT_RAD:
+                        self._pending_hits += 1
+                    else:
+                        self._pending_rad = measured
+                        self._pending_hits = 1
+                    if self._pending_hits >= SPIKE_CONFIRM:
+                        self.heading_rad = measured
+                        self._pending_rad = None
+                        self._pending_hits = 0
         return self.snapshot()
 
     def drift_correction(self, imu_heading_rad):
