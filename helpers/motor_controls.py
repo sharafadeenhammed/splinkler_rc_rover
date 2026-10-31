@@ -1,4 +1,4 @@
-from gpiozero import LED, Button, Motor, PWMOutputDevice
+from gpiozero import LED, Button, Motor, OutputDevice, PWMOutputDevice
 from time import sleep
 from threading import Lock
 from constants import PINOUT
@@ -9,13 +9,21 @@ from gpiozero.pins.pigpio import PiGPIOFactory
 factory = PiGPIOFactory()
 _motor_lock = Lock()
 
-# left motor pin init
-LEFT_MOTOR_FORWARD  = PWMOutputDevice(PINOUT.PIN11, initial_value=0, frequency=1000, pin_factory=factory)
-LEFT_MOTOR_REVERSE  = PWMOutputDevice(PINOUT.PIN12, initial_value=0, frequency=1000, pin_factory=factory)
+# Direction (IN) pins are plain DIGITAL outputs — no PWM here.  PWM duty
+# (speed) lives ONLY on the L298N enable pins below; these four just pick
+# the H-bridge direction (fully on or fully off).
+LEFT_MOTOR_FORWARD  = OutputDevice(PINOUT.PIN11, initial_value=False, pin_factory=factory)
+LEFT_MOTOR_REVERSE  = OutputDevice(PINOUT.PIN12, initial_value=False, pin_factory=factory)
 
-# right motor pin init
-RIGHT_MOTOR_FORWARD = PWMOutputDevice(PINOUT.PIN13, initial_value=0, frequency=1000, pin_factory=factory)
-RIGHT_MOTOR_REVERSE = PWMOutputDevice(PINOUT.PIN15, initial_value=0, frequency=1000, pin_factory=factory)
+RIGHT_MOTOR_FORWARD = OutputDevice(PINOUT.PIN13, initial_value=False, pin_factory=factory)
+RIGHT_MOTOR_REVERSE = OutputDevice(PINOUT.PIN15, initial_value=False, pin_factory=factory)
+
+# L298N enable pins: speed (PWM) lives HERE on ENA/ENB; the four IN pins
+# above only select direction (fully on or off).  The ENA/ENB jumper caps on
+# the driver board must be REMOVED, otherwise the enables are tied HIGH and
+# the motors ignore speed control.
+LEFT_MOTOR_ENABLE  = PWMOutputDevice(PINOUT.ENA, initial_value=0, frequency=1000, pin_factory=factory)
+RIGHT_MOTOR_ENABLE = PWMOutputDevice(PINOUT.ENB, initial_value=0, frequency=1000, pin_factory=factory)
 
 # ─── Polarity correction ──────────────────────────────────────────────────────
 # Set True if the rover physically moves BACKWARDS when forward() is called.
@@ -31,22 +39,30 @@ def stop():
         LEFT_MOTOR_REVERSE.value  = 0
         RIGHT_MOTOR_FORWARD.value = 0
         RIGHT_MOTOR_REVERSE.value = 0
+        LEFT_MOTOR_ENABLE.value   = 0
+        RIGHT_MOTOR_ENABLE.value  = 0
     _remember(0.0, 0.0)
 
 
 def _drive_forward(speed):
-    """Energise the physical 'forward' winding."""
+    """Energise the physical 'forward' winding (IN pins fully on, speed
+carried by the L298N enable pins)."""
     stop()
-    LEFT_MOTOR_FORWARD.value  = speed
-    RIGHT_MOTOR_FORWARD.value = speed
+    LEFT_MOTOR_FORWARD.value  = 1
+    RIGHT_MOTOR_FORWARD.value = 1
+    LEFT_MOTOR_ENABLE.value   = speed
+    RIGHT_MOTOR_ENABLE.value  = speed
     _remember(speed, speed)
 
 
 def _drive_reverse(speed):
-    """Energise the physical 'reverse' winding."""
+    """Energise the physical 'reverse' winding (IN pins fully on, speed
+carried by the L298N enable pins)."""
     stop()
-    LEFT_MOTOR_REVERSE.value  = speed
-    RIGHT_MOTOR_REVERSE.value = speed
+    LEFT_MOTOR_REVERSE.value  = 1
+    RIGHT_MOTOR_REVERSE.value = 1
+    LEFT_MOTOR_ENABLE.value   = speed
+    RIGHT_MOTOR_ENABLE.value  = speed
     _remember(-speed, -speed)
 
 
@@ -104,27 +120,41 @@ def drive_tank(left_speed, right_speed):
         if last_left_speed is None or (left_speed >= 0) != (last_left_speed >= 0):
             LEFT_MOTOR_FORWARD.value = 0
             LEFT_MOTOR_REVERSE.value = 0
-            
+            LEFT_MOTOR_ENABLE.value  = 0
+
         if left_speed >= 0:
-            if last_left_speed is None or LEFT_MOTOR_FORWARD.value != left_speed:
-                LEFT_MOTOR_FORWARD.value = left_speed
+            if LEFT_MOTOR_FORWARD.value != 1:
+                LEFT_MOTOR_FORWARD.value = 1
+            if LEFT_MOTOR_REVERSE.value != 0:
+                LEFT_MOTOR_REVERSE.value = 0
         else:
-            abs_left = abs(left_speed)
-            if last_left_speed is None or LEFT_MOTOR_REVERSE.value != abs_left:
-                LEFT_MOTOR_REVERSE.value = abs_left
+            if LEFT_MOTOR_REVERSE.value != 1:
+                LEFT_MOTOR_REVERSE.value = 1
+            if LEFT_MOTOR_FORWARD.value != 0:
+                LEFT_MOTOR_FORWARD.value = 0
+        abs_left = abs(left_speed)
+        if LEFT_MOTOR_ENABLE.value != abs_left:
+            LEFT_MOTOR_ENABLE.value = abs_left
 
         # Right motor
         if last_right_speed is None or (right_speed >= 0) != (last_right_speed >= 0):
             RIGHT_MOTOR_FORWARD.value = 0
             RIGHT_MOTOR_REVERSE.value = 0
-            
+            RIGHT_MOTOR_ENABLE.value  = 0
+
         if right_speed >= 0:
-            if last_right_speed is None or RIGHT_MOTOR_FORWARD.value != right_speed:
-                RIGHT_MOTOR_FORWARD.value = right_speed
+            if RIGHT_MOTOR_FORWARD.value != 1:
+                RIGHT_MOTOR_FORWARD.value = 1
+            if RIGHT_MOTOR_REVERSE.value != 0:
+                RIGHT_MOTOR_REVERSE.value = 0
         else:
-            abs_right = abs(right_speed)
-            if last_right_speed is None or RIGHT_MOTOR_REVERSE.value != abs_right:
-                RIGHT_MOTOR_REVERSE.value = abs_right
+            if RIGHT_MOTOR_REVERSE.value != 1:
+                RIGHT_MOTOR_REVERSE.value = 1
+            if RIGHT_MOTOR_FORWARD.value != 0:
+                RIGHT_MOTOR_FORWARD.value = 0
+        abs_right = abs(right_speed)
+        if RIGHT_MOTOR_ENABLE.value != abs_right:
+            RIGHT_MOTOR_ENABLE.value = abs_right
                 
     last_left_speed = left_speed
     last_right_speed = right_speed
@@ -134,11 +164,13 @@ def turnRight(speed=1.0):
     """Pivot right: left side forward, right side reverse."""
     stop()
     if MOTOR_REVERSED:
-        LEFT_MOTOR_REVERSE.value  = speed
-        RIGHT_MOTOR_FORWARD.value = speed
+        LEFT_MOTOR_REVERSE.value  = 1
+        RIGHT_MOTOR_FORWARD.value = 1
     else:
-        LEFT_MOTOR_FORWARD.value  = speed
-        RIGHT_MOTOR_REVERSE.value = speed
+        LEFT_MOTOR_FORWARD.value  = 1
+        RIGHT_MOTOR_REVERSE.value = 1
+    LEFT_MOTOR_ENABLE.value   = speed
+    RIGHT_MOTOR_ENABLE.value  = speed
     _remember(speed, -speed)
 
 
@@ -146,9 +178,11 @@ def turnLeft(speed=1.0):
     """Pivot left: right side forward, left side reverse."""
     stop()
     if MOTOR_REVERSED:
-        RIGHT_MOTOR_REVERSE.value  = speed
-        LEFT_MOTOR_FORWARD.value  = speed
+        RIGHT_MOTOR_REVERSE.value  = 1
+        LEFT_MOTOR_FORWARD.value   = 1
     else:
-        LEFT_MOTOR_REVERSE.value  = speed
-        RIGHT_MOTOR_FORWARD.value = speed
+        LEFT_MOTOR_REVERSE.value   = 1
+        RIGHT_MOTOR_FORWARD.value  = 1
+    LEFT_MOTOR_ENABLE.value   = speed
+    RIGHT_MOTOR_ENABLE.value  = speed
     _remember(-speed, speed)
