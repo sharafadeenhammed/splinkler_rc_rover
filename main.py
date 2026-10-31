@@ -11,6 +11,7 @@ import atexit
 import functools
 import gc
 import hmac
+import shutil
 
 # Line-buffer stdout: under systemd stdout is a journald socket and print()
 # output stays block-buffered for hours, hiding the memory watchdog's alerts
@@ -562,6 +563,24 @@ WATCHDOG_TICK_FAST = 1.0
 LINK_DOWN_STOP_SEC = float(os.environ.get("LINK_DOWN_STOP_SEC", "10"))
 WIFI_OPERSTATE_PATH = "/sys/class/net/wlan0/operstate"
 WIFI_ROUTE_PATH = "/proc/net/route"
+WIRELESS_STATS_PATH = "/proc/net/wireless"
+# Link diagnostics: ping the gateway this often while the route exists.
+# Catches the silent brcmfmac black-hole (route present, traffic dead) that
+# the journal logs nothing about — seen in the field twice (18:41 incident).
+WIFI_PROBE_INTERVAL_S = float(os.environ.get("WIFI_PROBE_INTERVAL_S", "30"))
+# Consecutive failed gateway probes before the link counts as dead.
+WIFI_PROBE_FAIL_LIMIT = int(os.environ.get("WIFI_PROBE_FAIL_LIMIT", "2"))
+# Healthy-link breadcrumb interval so every incident has a baseline in the
+# journal (0 disables).
+WIFI_DIAG_LOG_EVERY_S = float(os.environ.get("WIFI_DIAG_LOG_EVERY_S", "600"))
+# Self-recovery: bounce the Wi-Fi radio after the link has been dead this
+# long while the rover is idle — replaces the power cycle.  0 disables.
+WIFI_RECOVER_AFTER_SEC = float(os.environ.get("WIFI_RECOVER_AFTER_SEC", "60"))
+# Minimum gap between recovery attempts (radio needs ~20 s to rejoin).
+WIFI_RECOVER_COOLDOWN_S = float(os.environ.get("WIFI_RECOVER_COOLDOWN_S", "300"))
+# No ping binary -> gateway probes would "fail" forever and falsely trigger
+# self-recovery, so probing is skipped entirely (breadcrumbs still log).
+_PING_BIN = shutil.which("ping")
 _mem_warned = False
 _mem_early_logged = False
 _hist_dumped = False
@@ -627,6 +646,89 @@ def wifi_link_state(operstate_path=WIFI_OPERSTATE_PATH, route_path=WIFI_ROUTE_PA
     return "down"
 
 
+def wifi_gateway_ip(route_path=WIFI_ROUTE_PATH):
+    """Default gateway IP (str) from /proc/net/route, or None."""
+    try:
+        with open(route_path, "r") as handle:
+            handle.readline()  # header
+            for line in handle:
+                parts = line.split()
+                if len(parts) >= 4 and parts[1] == "00000000" and parts[2] != "00000000":
+                    try:
+                        if int(parts[3], 16) & 0x1:
+                            # Hex IP is little-endian per byte pair.
+                            return ".".join(str(int(parts[2][i:i + 2], 16)) for i in (6, 4, 2, 0))
+                    except ValueError:
+                        continue
+    except OSError:
+        return None
+    return None
+
+
+def read_wireless_stats(path=WIRELESS_STATS_PATH):
+    """wlan0 signal info from /proc/net/wireless -> {iface, quality,
+    level_dbm} or None.  Cheap (no subprocess), safe when wlan0 is absent."""
+    try:
+        with open(path, "r") as handle:
+            lines = handle.readlines()
+        if len(lines) < 3:
+            return None
+        parts = lines[2].split()
+        return {
+            "iface": parts[0].rstrip(":"),
+            "quality": float(parts[2].rstrip(".")),
+            "level_dbm": float(parts[3].rstrip(".")),
+        }
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def ping_rtt_ms(ip, timeout_s=2):
+    """One ICMP echo to ip; round-trip ms (float) or None if unreachable."""
+    try:
+        result = subprocess.run(
+            ["ping", "-c", "1", "-W", str(int(timeout_s)), ip],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=timeout_s + 2,
+        )
+        if result.returncode != 0:
+            return None
+        for token in result.stdout.replace(",", " ").split():
+            if token.startswith("time="):
+                return float(token.split("=", 1)[1])
+        return 0.0
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _wifi_recovery_attempt(escalate=False):
+    """Bounce the Wi-Fi radio (or restart NetworkManager when escalated).
+    Needs the same passwordless sudo that bt.py already relies on.  Runs
+    inside the watchdog thread; returns True if the commands ran."""
+    if escalate:
+        steps = [(["sudo", "systemctl", "restart", "NetworkManager"], 0)]
+    else:
+        steps = [
+            (["sudo", "nmcli", "radio", "wifi", "off"], 3),
+            (["sudo", "nmcli", "radio", "wifi", "on"], 3),
+        ]
+    for cmd, pause in steps:
+        try:
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=20,
+            )
+            if result.returncode != 0:
+                print(f"   ↳ {' '.join(cmd)} -> rc={result.returncode} {result.stderr.strip()[:120]}")
+                return False
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"   ↳ {' '.join(cmd)} -> {exc}")
+            return False
+        if pause:
+            time.sleep(pause)
+    return True
+
+
 def _dump_mem_history():
     """Print recent watchdog samples so the journal shows the ramp that led
     to a shed/critical event (previous incident logs were lost to reboot)."""
@@ -650,6 +752,11 @@ def memory_watchdog_loop():
     link_down_since = None
     link_down_logged = False
     link_stop_done = False
+    last_probe = 0.0
+    probe_fails = 0
+    last_diag_log = 0.0
+    recover_attempts = 0
+    last_recover = 0.0
     tick = WATCHDOG_TICK_SLOW
     while True:
         try:
@@ -699,30 +806,88 @@ def memory_watchdog_loop():
             if avail >= MEM_WARN_MB:
                 _hist_dumped = False
 
-            # Operator link guard: Wi-Fi death used to strand a moving rover
-            # with no kill switch (brcmfmac starves first under memory
-            # pressure).  Stop everything once the link is long gone.
+            # Operator link guard + link diagnostics + self-recovery:
+            # Wi-Fi death used to strand a moving rover with no kill switch
+            # (brcmfmac starves first under memory pressure).  Route checks
+            # catch a dropped link; periodic gateway pings additionally catch
+            # the SILENT brcmfmac hang (route still present, traffic dead,
+            # journal empty) seen in the field.  After a dead-link grace
+            # period the Wi-Fi radio is bounced automatically instead of
+            # waiting for a power cycle.
             if link != "absent":
                 now = time.monotonic()
-                if wifi_link_state() == "down":
+                route_up = wifi_link_state() == "up"
+                diag = read_wireless_stats()
+                diag_txt = ""
+                if diag:
+                    diag_txt = (f" (radio {diag['iface']}: level {diag['level_dbm']:.0f} dBm, "
+                                f"quality {diag['quality']:.0f})")
+
+                if route_up and now - last_probe >= WIFI_PROBE_INTERVAL_S:
+                    last_probe = now
+                    gw = wifi_gateway_ip()
+                    if gw is None:
+                        # Route exists but no usable gateway — can't judge the
+                        # link, so never count it as a failed probe.
+                        if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
+                            print(f"📡 link ok: default route without gateway{diag_txt}")
+                            last_diag_log = now
+                    elif _PING_BIN is None:
+                        if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
+                            print(f"📡 link ok: route present, ping unavailable{diag_txt}")
+                            last_diag_log = now
+                    else:
+                        rtt = ping_rtt_ms(gw)
+                        if rtt is not None:
+                            if probe_fails:
+                                print(f"✅ Wi-Fi gateway {gw} reachable again after {probe_fails} failed probe(s)")
+                            probe_fails = 0
+                            if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
+                                print(f"📡 link ok: gw {gw} rtt {rtt:.0f} ms{diag_txt}")
+                                last_diag_log = now
+                        else:
+                            probe_fails += 1
+                            print(f"📡 Wi-Fi probe {probe_fails}/{WIFI_PROBE_FAIL_LIMIT}: gateway {gw} unreachable{diag_txt}")
+
+                link_dead = (not route_up) or probe_fails >= WIFI_PROBE_FAIL_LIMIT
+                if link_dead:
                     if link_down_since is None:
                         link_down_since = now
+                        recover_attempts = 0
+                        last_recover = 0.0
                     elapsed = now - link_down_since
                     moving = is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn()
-                    if elapsed >= LINK_DOWN_STOP_SEC and not link_stop_done:
-                        if moving:
-                            print(f"📡 WI-FI LINK LOST {elapsed:.0f}s - emergency stop (operator cannot reach the rover)")
-                            emergency_stop_rover("Wi-Fi link lost")
-                            link_stop_done = True
-                        elif not link_down_logged:
-                            print(f"📡 Wi-Fi link down {elapsed:.0f}s (rover idle, waiting for recovery)")
-                            link_down_logged = True
+                    if elapsed >= LINK_DOWN_STOP_SEC and not link_stop_done and moving:
+                        print(f"📡 WI-FI LINK LOST {elapsed:.0f}s - emergency stop (operator cannot reach the rover)")
+                        emergency_stop_rover("Wi-Fi link lost")
+                        link_stop_done = True
+                    elif not link_down_logged and not moving and elapsed >= LINK_DOWN_STOP_SEC:
+                        print(f"📡 Wi-Fi link down {elapsed:.0f}s (rover idle, waiting for recovery){diag_txt}")
+                        link_down_logged = True
+
+                    # Self-recovery: radio bounce first, escalate to a full
+                    # NetworkManager restart from the 3rd attempt (that
+                    # recovers the wedged-scan-firmware case).  Never while
+                    # moving — the radio stays untouched under the operator's
+                    # feet; the link guard already stopped the rover above.
+                    if (WIFI_RECOVER_AFTER_SEC > 0 and not moving
+                            and elapsed >= WIFI_RECOVER_AFTER_SEC
+                            and now - last_recover >= WIFI_RECOVER_COOLDOWN_S):
+                        recover_attempts += 1
+                        last_recover = now
+                        escalate = recover_attempts >= 3
+                        action = "NetworkManager restart" if escalate else "radio bounce"
+                        print(f"🔁 Wi-Fi self-recovery #{recover_attempts} ({action}) - link dead {elapsed:.0f}s{diag_txt}")
+                        if _wifi_recovery_attempt(escalate):
+                            print(f"   ↳ {action} commands issued; waiting for rejoin")
                 elif link_down_since is not None:
                     if now - link_down_since >= 3.0:
                         print(f"✅ Wi-Fi link restored after {now - link_down_since:.0f}s")
                     link_down_since = None
                     link_down_logged = False
                     link_stop_done = False
+                    probe_fails = 0
+                    recover_attempts = 0
         except Exception as exc:
             print(f"⚠️ Memory watchdog error: {exc}")
             time.sleep(WATCHDOG_TICK_SLOW)

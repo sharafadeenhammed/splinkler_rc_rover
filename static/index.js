@@ -174,6 +174,23 @@ if (videoFeed) {
   videoFeed.addEventListener("load", () => { videoRetryAttempts = 0; });
 }
 
+// Re-establish the MJPEG feed on demand. When the server restarts mid-stream,
+// the browser often does NOT fire an error on the <img> — it just freezes on
+// the last frame — so the backoff above never runs. We therefore re-trigger
+// the stream whenever we have independent proof the server is back: a
+// WebSocket reconnect or a successful telemetry fetch.
+let lastVideoRefreshAt = 0;
+function refreshVideoFeed(reason) {
+  if (!videoFeed) return;
+  const now = Date.now();
+  if (now - lastVideoRefreshAt < 8000) return; // HTTP fallback polls every 2.5 s
+  lastVideoRefreshAt = now;
+  clearTimeout(videoRetryTimer);
+  videoRetryAttempts = 0;
+  console.log(`📹 Reconnecting video feed (${reason}).`);
+  videoFeed.src = `${baseURL}/stream?t=${now}`;
+}
+
 // ----------------- Connection Badge & State -----------------
 
 function updateConnectionBadge(state, text) {
@@ -214,6 +231,7 @@ function initWebSocket() {
   ws.onopen = () => {
     console.log("⚡ [WS] Connected to rover successfully.");
     wsConnected = true;
+    if (reconnectAttempts > 0) refreshVideoFeed("websocket reconnected");
     reconnectAttempts = 0;
     updateConnectionBadge("connected", "ONLINE ⚡");
 
@@ -321,6 +339,7 @@ function fetchSensorDataHttp() {
     .then((data) => {
       if (data.success) {
         renderTelemetry(data);
+        refreshVideoFeed("telemetry fetch succeeded");
       }
     })
     .catch((err) => console.warn("HTTP Telemetry fetch error:", err));

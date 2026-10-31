@@ -25,9 +25,11 @@ RestartSec=3
 # Cap this service so it can never consume the memory the Wi-Fi firmware
 # needs.  Under pressure the kernel reclaims first, then kills THIS service
 # (which restarts in 3 s) instead of letting brcmfmac fail to allocate and
-# killing Wi-Fi until a power cycle.  Tune down (e.g. 350M) once you know the
-# real peak RSS from:  journalctl -u rover -f  and  free -h
-MemoryMax=300M
+# killing Wi-Fi until a power cycle.  220M ≈ 1.5x the measured peak: app
+# 48 MB idle / 68 MB streaming, ~144 MB whole-system peak incl. camera
+# buffers (measured 2026-10-28); the watchdog sheds the camera far below
+# this line, so the cap only ever fires on a genuine leak.
+MemoryMax=220M
 # Make this service the OOM killer's first choice, ahead of wpa_supplicant /
 # brcmfmac (those have oom_score_adjust = 0 by default).
 OOMScoreAdjust=200
