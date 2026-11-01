@@ -88,7 +88,7 @@ sock = Sock(app) if HAS_SOCK else None
 # camera pan, auto speed) and their WebSocket equivalents demand it.  The
 # dashboard reads pin_required from telemetry and shows the PIN field only
 # when it is enforced.
-ROVER_PIN = os.environ.get("ROVER_PIN", "rover_123").strip()
+ROVER_PIN = os.environ.get("ROVER_PIN", "").strip()
 _PROTECTED_WS_COMMANDS = {"motor", "sensor_deploy", "pump", "auto_mode", "auto_speed", "camera_tilt"}
 
 
