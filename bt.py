@@ -106,13 +106,31 @@ class RoverService(Service):
         return update_status.encode("utf-8")
 
 
+async def get_adapter(bus):
+    """Pick the Bluetooth adapter (hci0, hci1, ...) directly.
+
+    Adapter.get_first() treats every node under /org/bluez as an adapter and
+    crashes with InterfaceNotFoundError when a non-adapter node such as
+    /org/bluez/test exists. Here we only look at nodes named hciX.
+    """
+    introspection = await bus.introspect("org.bluez", "/org/bluez")
+    names = sorted(n.name for n in introspection.nodes if n.name.startswith("hci"))
+    if not names:
+        raise RuntimeError("No Bluetooth adapter (hciX) found under /org/bluez")
+
+    path = f"/org/bluez/{names[0]}"
+    adapter_introspection = await bus.introspect("org.bluez", path)
+    proxy = bus.get_proxy_object("org.bluez", path, adapter_introspection)
+    return Adapter(proxy)
+
+
 async def main():
     bus = await get_message_bus()
 
-    service = RoverService()
-    await service.register(bus)
+    adapter = await get_adapter(bus)
 
-    adapter = await Adapter.get_first(bus)
+    service = RoverService()
+    await service.register(bus, adapter=adapter)
 
     advert = Advertisement(
         localName="Smart-Rover",
