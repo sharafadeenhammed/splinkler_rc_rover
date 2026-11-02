@@ -13,13 +13,14 @@ WorkingDirectory=/home/rover_dev/project
 # threads on a 512 MB board the freed/fragmented arenas keep RSS tens of MB
 # higher than it needs to be.  Two arenas is the standard Raspberry Pi fix.
 Environment=MALLOC_ARENA_MAX=2
-ExecStart=/home/rover_dev/project/.venv/bin/gunicorn --config deploy/gunicorn.conf.py main:app
+#ExecStart=/home/rover_dev/project/.venv/bin/gunicorn --config deploy/gunicorn.conf.py main:app
+ExecStart=/home/rover_dev/project/.venv/bin/python /home/rover_dev/project/main.py
 # Optional command PIN: set ROVER_PIN on the Pi's copy of this unit (don't
 # commit real values).  When set, the six control endpoints and their WS
 # equivalents demand it; empty/unset keeps the old open behaviour.
 # Environment=ROVER_PIN=123456
 Restart=on-failure
-RestartSec=3
+RestartSec=9
 
 # --- Memory backstop (512 MB Pi Zero W) ------------------------------------
 # Cap this service so it can never consume the memory the Wi-Fi firmware
@@ -29,10 +30,11 @@ RestartSec=3
 # 48 MB idle / 68 MB streaming, ~144 MB whole-system peak incl. camera
 # buffers (measured 2026-10-28); the watchdog sheds the camera far below
 # this line, so the cap only ever fires on a genuine leak.
-MemoryMax=220M
+#MemoryMax=220M
+
 # Make this service the OOM killer's first choice, ahead of wpa_supplicant /
 # brcmfmac (those have oom_score_adjust = 0 by default).
-OOMScoreAdjust=200
+#OOMScoreAdjust=200
 
 # pigpiod keeps GPIO PWM running after this process dies, so an OOM kill
 # (SIGKILL — no atexit/signal handler can run) would otherwise leave the
