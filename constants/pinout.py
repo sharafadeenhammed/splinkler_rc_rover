@@ -46,10 +46,10 @@ class PINOUT:
 
   # JGB37-520 encoder outputs (BCM numbering).
   # Yellow = channel A, green = channel B.
-  LEFT_ENCODER_A = PIN29
-  LEFT_ENCODER_B = PIN33
-  RIGHT_ENCODER_A = PIN35
-  RIGHT_ENCODER_B = PIN36
+  RIGHT_ENCODER_A = PIN29
+  RIGHT_ENCODER_B = PIN33
+  LEFT_ENCODER_A = PIN35
+  LEFT_ENCODER_B = PIN36
 
 
 __all__ = ["PINOUT"]
