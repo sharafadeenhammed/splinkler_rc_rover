@@ -177,7 +177,7 @@ class SharedCameraStream:
 
     def _start_locked(self):
         command = [
-            "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "50",
+            "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "30",
             "--inline", "-o", "-", "--width", "640", "--height", "480",
             "--framerate", "4", "-n", "--denoise", "cdn_off",
         ]
