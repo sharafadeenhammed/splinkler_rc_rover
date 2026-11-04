@@ -33,7 +33,7 @@ const roverMap = document.getElementById("roverMap");
 const poseText = document.getElementById("poseText");
 const mapCoordinateText = document.getElementById("mapCoordinateText");
 const gpsText = document.getElementById("gpsText");
-const videoFeed = document.getElementById("videoFeed");
+const videoStream = document.getElementById("videoStream");
 const valEncLeft = document.getElementById("valEncLeft");
 const valEncRight = document.getElementById("valEncRight");
 const compassCard = document.getElementById("compassCard");
@@ -117,13 +117,8 @@ let wsConnected = false;
 let reconnectTimer = null;
 let heartbeatInterval = null;
 let httpPollInterval = null;
-let videoRetryTimer = null;
 let reconnectAttempts = 0;
-let videoRetryAttempts = 0;
 const MAX_RECONNECT_DELAY_MS = 5000;
-
-// Initialize video feed source
-if (videoFeed) videoFeed.src = `${baseURL}/stream`;
 
 if (roverMap && window.L) {
   leafletMap = L.map(roverMap, { zoomControl: true, scrollWheelZoom: true, wheelPxPerZoomLevel: 100 }).setView(mapOrigin, 18);
@@ -156,39 +151,80 @@ if (roverMap && window.L) {
   }
 }
 
-// ----------------- Video Feed Reconnection -----------------
+// ----------------- Camera: WebRTC (H.264) only -----------------
+// MediaMTX on the Pi owns the camera, hardware-encodes H.264 and publishes it
+// over WebRTC (WHEP on port 8889). The <video> is the only feed: there is no
+// MJPEG path and no MJPEG fallback.
 
-function handleVideoError() {
-  console.warn("📹 Video stream dropped. Retrying with backoff...");
-  clearTimeout(videoRetryTimer);
-  const delay = Math.min(3000 * (2 ** videoRetryAttempts), 30000);
-  videoRetryAttempts = Math.min(videoRetryAttempts + 1, 4);
-  videoRetryTimer = setTimeout(() => {
-    if (videoFeed) {
-      videoFeed.src = `${baseURL}/stream`;
-    }
-  }, delay);
+const CAMERA_PATH = "rover";
+const WEBRTC_WHEP_URL = `http://${location.hostname}:8889/${CAMERA_PATH}/whep`;
+const WEBRTC_RETRY_MS = 5000;
+let peerConnection = null;
+let webrtcRetryTimer = null;
+let webrtcVideoTimer = null;
+
+function closeWebRTC() {
+  clearTimeout(webrtcVideoTimer);
+  clearTimeout(webrtcRetryTimer);
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (_) {}
+    peerConnection = null;
+  }
+  if (videoStream) videoStream.srcObject = null;
 }
 
-if (videoFeed) {
-  videoFeed.addEventListener("load", () => { videoRetryAttempts = 0; });
+function retryWebRTC(reason) {
+  console.warn(`📹 WebRTC: ${reason}. Retrying in ${WEBRTC_RETRY_MS / 1000}s.`);
+  closeWebRTC();
+  webrtcRetryTimer = setTimeout(() => connectWebRTC(reason), WEBRTC_RETRY_MS);
 }
 
-// Re-establish the MJPEG feed on demand. When the server restarts mid-stream,
-// the browser often does NOT fire an error on the <img> — it just freezes on
-// the last frame — so the backoff above never runs. We therefore re-trigger
-// the stream whenever we have independent proof the server is back: a
-// WebSocket reconnect or a successful telemetry fetch.
-let lastVideoRefreshAt = 0;
-function refreshVideoFeed(reason) {
-  if (!videoFeed) return;
-  const now = Date.now();
-  if (now - lastVideoRefreshAt < 8000) return; // HTTP fallback polls every 2.5 s
-  lastVideoRefreshAt = now;
-  clearTimeout(videoRetryTimer);
-  videoRetryAttempts = 0;
-  console.log(`📹 Reconnecting video feed (${reason}).`);
-  videoFeed.src = `${baseURL}/stream?t=${now}`;
+async function connectWebRTC(reason) {
+  if (!videoStream || !window.RTCPeerConnection) {
+    console.warn("📹 WebRTC is not supported by this browser.");
+    return false;
+  }
+  closeWebRTC();
+  const connection = new RTCPeerConnection();
+  peerConnection = connection;
+  connection.addTransceiver("video", { direction: "recvonly" });
+
+  connection.ontrack = (event) => {
+    if (connection !== peerConnection) return;
+    clearTimeout(webrtcVideoTimer);
+    videoStream.srcObject = event.streams[0];
+    const play = videoStream.play();
+    if (play && play.catch) play.catch(() => {});
+    console.log("📹 WebRTC H.264 stream live.");
+  };
+
+  connection.onconnectionstatechange = () => {
+    if (connection !== peerConnection) return;
+    const state = connection.connectionState;
+    if (state === "failed" || state === "disconnected") retryWebRTC(`connection ${state}`);
+  };
+
+  try {
+    const offer = await connection.createOffer();
+    await connection.setLocalDescription(offer);
+    const response = await fetch(WEBRTC_WHEP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: offer.sdp,
+    });
+    if (!response.ok) throw new Error(`WHEP HTTP ${response.status}`);
+    const answer = await response.text();
+    if (connection !== peerConnection) return false;
+    await connection.setRemoteDescription({ type: "answer", sdp: answer });
+    console.log(`📹 WebRTC negotiated (${reason}).`);
+    webrtcVideoTimer = setTimeout(() => {
+      if (connection === peerConnection && !videoStream.srcObject) retryWebRTC("no video received");
+    }, 10000);
+    return true;
+  } catch (err) {
+    if (connection === peerConnection) retryWebRTC(err.message || "signalling failed");
+    return false;
+  }
 }
 
 // ----------------- Connection Badge & State -----------------
@@ -231,7 +267,6 @@ function initWebSocket() {
   ws.onopen = () => {
     console.log("⚡ [WS] Connected to rover successfully.");
     wsConnected = true;
-    if (reconnectAttempts > 0) refreshVideoFeed("websocket reconnected");
     reconnectAttempts = 0;
     updateConnectionBadge("connected", "ONLINE ⚡");
 
@@ -339,7 +374,6 @@ function fetchSensorDataHttp() {
     .then((data) => {
       if (data.success) {
         renderTelemetry(data);
-        refreshVideoFeed("telemetry fetch succeeded");
       }
     })
     .catch((err) => console.warn("HTTP Telemetry fetch error:", err));
@@ -1009,7 +1043,7 @@ window.addEventListener("blur", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  clearTimeout(videoRetryTimer);
+  closeWebRTC();
   if (activeDirection) {
     sendHardwareCommand(0, "stop");
   }
@@ -1019,6 +1053,9 @@ window.addEventListener("beforeunload", () => {
     } catch (_) {}
   }
 });
+
+// Camera boot: start the WebRTC session on page load.
+if (videoStream) connectWebRTC("page load");
 
 // Initialize WebSocket on page load
 initWebSocket();

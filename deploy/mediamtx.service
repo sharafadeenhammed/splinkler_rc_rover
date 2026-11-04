@@ -1,0 +1,19 @@
+[Unit]
+Description=MediaMTX camera server (H.264 over WebRTC) for the rover dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rover_dev
+WorkingDirectory=/home/rover_dev/project
+# libcamera talks to /dev/video* through the video group.
+SupplementaryGroups=video
+# The rpiCamera source needs the libcamera apps from Raspberry Pi OS Bookworm
+# or newer; the unit fails fast on older releases with a clear message.
+ExecStart=/home/rover_dev/project/bin/mediamtx /home/rover_dev/project/deploy/mediamtx.yml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

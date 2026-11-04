@@ -3,15 +3,13 @@ import sys
 import signal
 import time
 import threading
-import subprocess
 import json
-import select
 import math
 import atexit
 import functools
 import hmac
 
-from flask import Flask, Response, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify
 from flask_sock import Sock
 import simple_websocket
 
@@ -146,128 +144,6 @@ def read_sensor_loop():
       print(f"⚠️ Sensor read error: {e}")
       # Sensor chips (like DHT22 or BME280) should not be polled faster than 1-2 seconds.
       time.sleep(2.0)
-
-class SharedCameraStream:
-    """One low-bitrate camera process shared by the dashboard stream."""
-
-    def __init__(self):
-        self.lock = threading.RLock()
-        self.condition = threading.Condition(self.lock)
-        self.process = None
-        self.clients = 0
-        self.sequence = 0
-        self.frame = None  # Keep only the latest JPEG in RAM.
-        self.last_client_at = time.monotonic()
-
-    def subscribe(self):
-        with self.lock:
-            if self.clients >= 1:
-                return False
-            self.clients = 1
-            self.last_client_at = time.monotonic()
-            if self.process is None or self.process.poll() is not None:
-                self._start_locked()
-            return True
-
-    def unsubscribe(self):
-        with self.condition:
-            self.clients = 0
-            self.last_client_at = time.monotonic()
-            self.condition.notify_all()
-
-    def _start_locked(self):
-        command = [
-            "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--quality", "30",
-            "--inline", "-o", "-", "--width", "640", "--height", "480",
-            "--framerate", "4", "-n", "--denoise", "cdn_off",
-        ]
-        try:
-            self.process = subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
-            )
-        except (FileNotFoundError, OSError) as exc:
-            self.process = None
-            print(f"Camera unavailable: {exc}")
-            return
-        threading.Thread(target=self._reader, args=(self.process,), daemon=True).start()
-
-    def _reader(self, process):
-        buffer = bytearray()
-        try:
-            while process.poll() is None:
-                with self.lock:
-                    idle = (self.clients == 0
-                            and time.monotonic() - self.last_client_at > 5.0)
-                if idle:
-                    break
-                ready, _, _ = select.select([process.stdout], [], [], 0.5)
-                if not ready:
-                    continue
-                chunk = os.read(process.stdout.fileno(), 8192)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
-                if len(buffer) > 128 * 1024:
-                    del buffer[:-8192]
-                while True:
-                    start = buffer.find(b"\xff\xd8")
-                    if start < 0:
-                        buffer.clear()
-                        break
-                    end = buffer.find(b"\xff\xd9", start + 2)
-                    if end < 0:
-                        if start:
-                            del buffer[:start]
-                        break
-                    frame = bytes(buffer[start:end + 2])
-                    del buffer[:end + 2]
-                    with self.condition:
-                        self.frame = frame
-                        self.sequence += 1
-                        self.condition.notify_all()
-        except (OSError, ValueError) as exc:
-            print(f"Camera stream ended: {exc}")
-        finally:
-            try:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=2)
-            except Exception:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
-            with self.condition:
-                if self.process is process:
-                    self.process = None
-                    self.frame = None
-                    self.sequence += 1
-                self.condition.notify_all()
-
-    def frames(self):
-        if not self.subscribe():
-            return
-        last_sequence = -1
-        try:
-            while True:
-                with self.condition:
-                    self.condition.wait_for(
-                        lambda: self.sequence != last_sequence or self.clients == 0,
-                        timeout=2.0,
-                    )
-                    if self.clients == 0:
-                        break
-                    frame = self.frame
-                    sequence = self.sequence
-                if frame is not None and sequence != last_sequence:
-                    last_sequence = sequence
-                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
-                           str(len(frame)).encode("ascii") + b"\r\n\r\n" + frame + b"\r\n")
-        finally:
-            self.unsubscribe()
-
-
-camera_stream = SharedCameraStream()
 
 class WSClientWrapper:
     def __init__(self, ws):
@@ -722,17 +598,6 @@ def ws_handler(ws):
             broadcast_telemetry()
 
 # ----------------- Existing HTTP Endpoints (Preserved) -----------------
-
-@app.route('/stream')
-def video_stream():
-    with camera_stream.lock:
-        if camera_stream.clients >= 1:
-            return Response("Camera stream already in use", status=429, headers={"Retry-After": "3"})
-    return Response(
-        camera_stream.frames(),
-        mimetype='multipart/x-mixed-replace; boundary=frame',
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Accel-Buffering": "no"},
-    )
 
 @app.route("/")
 def home():

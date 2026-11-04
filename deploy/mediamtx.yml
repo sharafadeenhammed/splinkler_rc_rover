@@ -1,0 +1,66 @@
+# MediaMTX — Raspberry Pi camera -> hardware H.264 -> WebRTC (WHEP).
+#
+# Pipeline:
+#   Pi camera (libcamera) -> BCM2835 hardware H.264 encoder -> RTP/SRTP -> browser
+#
+# The camera is owned by MediaMTX (source: rpiCamera), so the Flask app no
+# longer has to fork rpicam-vid for the live view; /stream (M-JPEG) is only a
+# fallback used when WebRTC cannot connect.
+#
+# Installed and started by deploy/setup_webrtc.sh (systemd unit:
+# deploy/mediamtx.service).  Reference: mediamtx.org/docs
+
+logLevel: info
+logDestinations: [stdout]
+logStructured: false
+
+# Everything the dashboard does not use is switched off: the Zero W has one
+# core, and every extra listener costs RAM.
+api: false
+metrics: false
+pprof: false
+playback: false
+hls: false
+rtmp: false
+srt: false
+moq: false
+
+# RTSP stays on, but loopback-only: ffplay/VLC on the Pi is the fastest way to
+# prove the encoder works without involving a browser.
+rtsp: true
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
+
+# WebRTC: HTTP/ICE signalling on 8889 (WHEP), media over UDP on 8189.
+webrtc: true
+webrtcAddress: :8889
+webrtcAllowOrigins: ["*"]
+webrtcLocalUDPAddress: :8189
+# The dashboard runs on http://<pi>:5000, a different origin AND a different
+# port, so the browser needs the server's LAN IP in the ICE candidates.
+webrtcIPsFromInterfaces: true
+# Leave empty unless ICE cannot find the Pi (e.g. multiple interfaces):
+# webrtcAdditionalHosts: [192.168.1.50]
+
+pathDefaults:
+  # Start the camera when the first viewer connects and stop it 10 s after the
+  # last one leaves — on the Zero W the encoder must not run while nobody
+  # watches.
+  sourceOnDemand: true
+  sourceOnDemandStartTimeout: 10s
+  sourceOnDemandCloseAfter: 10s
+
+paths:
+  # Dashboard reads http://<pi>:8889/rover/whep (see static/index.js).
+  rover:
+    source: rpiCamera
+    rpiCameraWidth: 640
+    rpiCameraHeight: 480
+    rpiCameraFPS: 15
+    # Hardware encoder: a fraction of the CPU the old M-JPEG path used.
+    rpiCameraCodec: hardwareH264
+    rpiCameraBitrate: 1000000
+    # Keyframe every second (15 frames) so a viewer that joins mid-stream has
+    # a picture almost immediately.
+    rpiCameraIDRPeriod: 15
+    rpiCameraDenoise: cdn_off
