@@ -9,16 +9,11 @@ import select
 import math
 import atexit
 import functools
-import gc
 import hmac
-import shutil
 
 from flask import Flask, Response, render_template, request, jsonify
 from flask_sock import Sock
 import simple_websocket
-
-HAS_SOCK = True 
-
 
 from helpers import (
     forward, reverse, turnRight, turnLeft, stop,
@@ -29,7 +24,7 @@ from helpers import (
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed,
     set_area_polygon,
-    get_encoder_ticks, reset_encoders, encoder_config
+    get_encoder_ticks, encoder_config
 )
 from helpers.mpu6050 import (
     get_imu_snapshot, update_imu, calibrate_imu, reset_imu_heading, set_imu_heading_rad,
@@ -44,55 +39,8 @@ from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
 from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
 
-# Line-buffer stdout: under systemd stdout is a journald socket and print()
-# output stays block-buffered for hours, hiding the memory watchdog's alerts
-# exactly when the operator needs to see them.  TTY (manual) runs unaffected.
-
-# try:
-#     sys.stdout.reconfigure(line_buffering=True)
-# except (AttributeError, ValueError, OSError):
-#     pass
-
-
-# When launched manually (`python main.py`) there is no systemd unit to set
-# OOMScoreAdjust=200, so on a global OOM the kernel may kill wpa_supplicant /
-# dhcpcd first — or brcmfmac simply starves — and Wi-Fi dies until a power
-# cycle.  Raising our own OOM score needs no root, so in a manual run the
-# rover is always killed first and the network stack survives.  Under systemd
-# INVOCATION_ID is set and the unit's OOMScoreAdjust owns this setting.
-
-# if "INVOCATION_ID" not in os.environ:
-#     try:
-#         with open("/proc/self/oom_score_adj", "w") as _oom_handle:
-#             _oom_handle.write("500\n")
-#         with open("/proc/self/oom_score_adj", "r") as _oom_handle:
-#             _oom_value = _oom_handle.read().strip()
-#         print(f"🛡️ Manual run: oom_score_adj=+{_oom_value} (rover dies first on OOM, Wi-Fi survives)")
-#     except OSError as _oom_err:
-#         print(f"⚠️ Could not raise oom_score_adj: {_oom_err}")
-
-
-
-# Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
-# try:
-#     os.nice(10)
-# except (OSError, AttributeError):
-#     pass
-
-# try:
-#     from flask_sock import Sock
-#     import simple_websocket
-#     HAS_SOCK = True
-# except ImportError:
-#     HAS_SOCK = False
-#     Sock = None
-#     simple_websocket = None
-#     print("⚠️ flask-sock not installed. WebSocket functionality will be disabled.")
-
-
-
 app = Flask(__name__)
-sock = Sock(app) if HAS_SOCK else None
+sock = Sock(app)
 
 # Optional command PIN: the service environment's ROVER_PIN wins; when it is
 # absent, the fallback below applies (an explicit empty value keeps the old
@@ -210,12 +158,9 @@ class SharedCameraStream:
         self.sequence = 0
         self.frame = None  # Keep only the latest JPEG in RAM.
         self.last_client_at = time.monotonic()
-        self.blocked_until = 0.0  # memory watchdog cooldown (monotonic)
 
     def subscribe(self):
         with self.lock:
-            if time.monotonic() < self.blocked_until:
-                return False
             if self.clients >= 1:
                 return False
             self.clients = 1
@@ -228,18 +173,6 @@ class SharedCameraStream:
         with self.condition:
             self.clients = 0
             self.last_client_at = time.monotonic()
-            self.condition.notify_all()
-
-    def stop(self, reason="idle", cooldown_sec=0.0):
-        """Kill the camera process now (memory pressure) and optionally refuse
-        to restart for cooldown_sec — the dashboard retries /stream on a timer,
-        so without a cooldown the camera would thrash straight back on."""
-        with self.condition:
-            self.clients = 0
-            self.last_client_at = 0.0  # reader thread sees idle immediately
-            if cooldown_sec:
-                self.blocked_until = time.monotonic() + cooldown_sec
-            print(f"📷 Camera stopped ({reason}).")
             self.condition.notify_all()
 
     def _start_locked(self):
@@ -558,45 +491,8 @@ def emergency_stop_rover(reason="user disconnected"):
     except Exception as e:
         print(f"⚠️ Failsafe servo retract error: {e}")
 
-# ----------------- Memory watchdog (Pi Zero W, 512 MB total) ----------------
-# The rover shares 512 MB with the Wi-Fi firmware.  When RAM runs out the
-# brcmfmac driver fails to allocate its buffers and Wi-Fi dies until a power
-# cycle, stranding the operator.  This watchdog sheds load (camera first,
-# then motors/pump/auto) BEFORE the kernel gets desperate.
+# Pi Zero W: telemetry reports how much of the shared 512 MB is left.
 MEMINFO_PATH = "/proc/meminfo"
-MEM_WARN_MB = float(os.environ.get("MEM_WARN_MB", "80"))
-MEM_CRITICAL_MB = float(os.environ.get("MEM_CRITICAL_MB", "60"))
-# Breadcrumb tier above the shed threshold: garbage collection + 1 s polling
-# start here so a fast leak is caught before it reaches warn/critical.
-MEM_EARLY_MB = float(os.environ.get("MEM_EARLY_MB", "150"))
-WATCHDOG_TICK_SLOW = 5.0
-WATCHDOG_TICK_FAST = 1.0
-# Stop the rover this long after the operator's network link disappears.
-LINK_DOWN_STOP_SEC = float(os.environ.get("LINK_DOWN_STOP_SEC", "10"))
-WIFI_OPERSTATE_PATH = "/sys/class/net/wlan0/operstate"
-WIFI_ROUTE_PATH = "/proc/net/route"
-WIRELESS_STATS_PATH = "/proc/net/wireless"
-# Link diagnostics: ping the gateway this often while the route exists.
-# Catches the silent brcmfmac black-hole (route present, traffic dead) that
-# the journal logs nothing about — seen in the field twice (18:41 incident).
-WIFI_PROBE_INTERVAL_S = float(os.environ.get("WIFI_PROBE_INTERVAL_S", "30"))
-# Consecutive failed gateway probes before the link counts as dead.
-WIFI_PROBE_FAIL_LIMIT = int(os.environ.get("WIFI_PROBE_FAIL_LIMIT", "2"))
-# Healthy-link breadcrumb interval so every incident has a baseline in the
-# journal (0 disables).
-WIFI_DIAG_LOG_EVERY_S = float(os.environ.get("WIFI_DIAG_LOG_EVERY_S", "600"))
-# Self-recovery: bounce the Wi-Fi radio after the link has been dead this
-# long while the rover is idle — replaces the power cycle.  0 disables.
-WIFI_RECOVER_AFTER_SEC = float(os.environ.get("WIFI_RECOVER_AFTER_SEC", "60"))
-# Minimum gap between recovery attempts (radio needs ~20 s to rejoin).
-WIFI_RECOVER_COOLDOWN_S = float(os.environ.get("WIFI_RECOVER_COOLDOWN_S", "300"))
-# No ping binary -> gateway probes would "fail" forever and falsely trigger
-# self-recovery, so probing is skipped entirely (breadcrumbs still log).
-_PING_BIN = shutil.which("ping")
-_mem_warned = False
-_mem_early_logged = False
-_hist_dumped = False
-_mem_history = []
 
 
 def read_meminfo(path=MEMINFO_PATH):
@@ -624,287 +520,6 @@ def read_meminfo(path=MEMINFO_PATH):
         return None
 
 
-def read_self_rss_mb():
-    """Resident set size of this process in MB (None if unreadable)."""
-    try:
-        with open("/proc/self/status", "r") as handle:
-            for line in handle:
-                if line.startswith("VmRSS:"):
-                    return float(line.split()[1]) / 1024.0
-    except (OSError, ValueError, IndexError):
-        return None
-    return None
-
-
-def wifi_link_state(operstate_path=WIFI_OPERSTATE_PATH, route_path=WIFI_ROUTE_PATH):
-    """Operator link health: 'up' (a default route exists — the operator can
-    still reach the rover over any interface), 'down' (no default route but a
-    Wi-Fi interface exists) or 'absent' (no interface — guard disabled)."""
-    try:
-        with open(route_path, "r") as handle:
-            handle.readline()  # header
-            for line in handle:
-                parts = line.split()
-                if len(parts) >= 4 and parts[1] == "00000000":
-                    try:
-                        if int(parts[3], 16) & 0x1:
-                            return "up"
-                    except ValueError:
-                        continue
-    except OSError:
-        return "absent"
-    if not os.path.exists(operstate_path):
-        return "absent"
-    return "down"
-
-
-def wifi_gateway_ip(route_path=WIFI_ROUTE_PATH):
-    """Default gateway IP (str) from /proc/net/route, or None."""
-    try:
-        with open(route_path, "r") as handle:
-            handle.readline()  # header
-            for line in handle:
-                parts = line.split()
-                if len(parts) >= 4 and parts[1] == "00000000" and parts[2] != "00000000":
-                    try:
-                        if int(parts[3], 16) & 0x1:
-                            # Hex IP is little-endian per byte pair.
-                            return ".".join(str(int(parts[2][i:i + 2], 16)) for i in (6, 4, 2, 0))
-                    except ValueError:
-                        continue
-    except OSError:
-        return None
-    return None
-
-
-def read_wireless_stats(path=WIRELESS_STATS_PATH):
-    """wlan0 signal info from /proc/net/wireless -> {iface, quality,
-    level_dbm} or None.  Cheap (no subprocess), safe when wlan0 is absent."""
-    try:
-        with open(path, "r") as handle:
-            lines = handle.readlines()
-        if len(lines) < 3:
-            return None
-        parts = lines[2].split()
-        return {
-            "iface": parts[0].rstrip(":"),
-            "quality": float(parts[2].rstrip(".")),
-            "level_dbm": float(parts[3].rstrip(".")),
-        }
-    except (OSError, ValueError, IndexError):
-        return None
-
-
-def ping_rtt_ms(ip, timeout_s=2):
-    """One ICMP echo to ip; round-trip ms (float) or None if unreachable."""
-    try:
-        result = subprocess.run(
-            ["ping", "-c", "1", "-W", str(int(timeout_s)), ip],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, timeout=timeout_s + 2,
-        )
-        if result.returncode != 0:
-            return None
-        for token in result.stdout.replace(",", " ").split():
-            if token.startswith("time="):
-                return float(token.split("=", 1)[1])
-        return 0.0
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
-
-
-def _wifi_recovery_attempt(escalate=False):
-    """Bounce the Wi-Fi radio (or restart NetworkManager when escalated).
-    Needs the same passwordless sudo that bt.py already relies on.  Runs
-    inside the watchdog thread; returns True if the commands ran."""
-    if escalate:
-        steps = [(["sudo", "systemctl", "restart", "NetworkManager"], 0)]
-    else:
-        steps = [
-            (["sudo", "nmcli", "radio", "wifi", "off"], 3),
-            (["sudo", "nmcli", "radio", "wifi", "on"], 3),
-        ]
-    for cmd, pause in steps:
-        try:
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=20,
-            )
-            if result.returncode != 0:
-                print(f"   ↳ {' '.join(cmd)} -> rc={result.returncode} {result.stderr.strip()[:120]}")
-                return False
-        except (OSError, subprocess.SubprocessError) as exc:
-            print(f"   ↳ {' '.join(cmd)} -> {exc}")
-            return False
-        if pause:
-            time.sleep(pause)
-    return True
-
-
-def _dump_mem_history():
-    """Print recent watchdog samples so the journal shows the ramp that led
-    to a shed/critical event (previous incident logs were lost to reboot)."""
-    if not _mem_history:
-        return
-    print(f"📟 Memory history ({len(_mem_history)} samples, oldest first):")
-    for entry in _mem_history:
-        print(f"   {entry}")
-
-
-# def memory_watchdog_loop():
-    """Shed load on low memory and stop the rover if the operator link dies.
-    Runs for manual AND systemd launches: the unit's MemoryMax/OOMScoreAdjust
-    only exist under systemd, so this in-process guard plus the startup
-    oom_score_adj raise are what protect a bare `python main.py` run."""
-    global _mem_warned, _mem_early_logged, _hist_dumped
-    print("🧠 Memory watchdog started.")
-    link = wifi_link_state()
-    if link == "absent":
-        print("🔎 Wi-Fi link monitor disabled (no network interface found).")
-    link_down_since = None
-    link_down_logged = False
-    link_stop_done = False
-    last_probe = 0.0
-    probe_fails = 0
-    last_diag_log = 0.0
-    recover_attempts = 0
-    last_recover = 0.0
-    tick = WATCHDOG_TICK_SLOW
-    # while True:
-    #     try:
-    #         time.sleep(tick)
-    #         mem = read_meminfo()
-    #         if mem is None:
-    #             continue
-    #         avail = mem["mem_available_mb"]
-    #         rss = read_self_rss_mb()
-    #         rss_txt = f", rover RSS {rss:.0f} MB" if rss is not None else ""
-    #         _mem_history.append(
-    #             f"{time.strftime('%H:%M:%S')} avail={avail:.0f}MB "
-    #             f"rss={rss if rss is not None else '?'}MB "
-    #             f"swap={mem.get('swap_used_mb', 0.0):.0f}MB"
-    #         )
-    #         del _mem_history[:-90]
-    #         tick = WATCHDOG_TICK_FAST if avail < MEM_EARLY_MB else WATCHDOG_TICK_SLOW
-
-    #         # Early breadcrumb: start reclaiming before the shed threshold.
-    #         if avail < MEM_EARLY_MB and not _mem_early_logged:
-    #             print(f"🔎 MEMORY WATCH: {avail:.0f} MB available{rss_txt} - collecting garbage")
-    #             gc.collect()
-    #             _mem_early_logged = True
-    #         elif avail > MEM_EARLY_MB + 20:
-    #             _mem_early_logged = False
-
-    #         # Camera is the biggest optional consumer: shed it first.  Also
-    #         # shed again if the dashboard reconnected it while still low.
-    #         if avail < MEM_WARN_MB and (not _mem_warned or camera_stream.clients >= 1):
-    #             print(f"⚠️ LOW MEMORY: {avail:.0f} MB available{rss_txt} - shedding camera stream")
-    #             if not _hist_dumped:
-    #                 _dump_mem_history()
-    #                 _hist_dumped = True
-    #             camera_stream.stop("low memory", cooldown_sec=60.0)
-    #             gc.collect()
-
-    #         # Never let the rover keep driving on a starved board.
-    #         if (avail < MEM_CRITICAL_MB and
-    #                 (is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn())):
-    #             print(f"🛑 CRITICAL MEMORY: {avail:.0f} MB available{rss_txt} - emergency stop")
-    #             _dump_mem_history()
-    #             emergency_stop_rover(f"low memory ({avail:.0f} MB)")
-    #             camera_stream.stop("memory critical", cooldown_sec=120.0)
-    #             gc.collect()
-
-    #         _mem_warned = avail < MEM_WARN_MB
-    #         if avail >= MEM_WARN_MB:
-    #             _hist_dumped = False
-
-    #         # Operator link guard + link diagnostics + self-recovery:
-    #         # Wi-Fi death used to strand a moving rover with no kill switch
-    #         # (brcmfmac starves first under memory pressure).  Route checks
-    #         # catch a dropped link; periodic gateway pings additionally catch
-    #         # the SILENT brcmfmac hang (route still present, traffic dead,
-    #         # journal empty) seen in the field.  After a dead-link grace
-    #         # period the Wi-Fi radio is bounced automatically instead of
-    #         # waiting for a power cycle.
-    #         if link != "absent":
-    #             now = time.monotonic()
-    #             route_up = wifi_link_state() == "up"
-    #             diag = read_wireless_stats()
-    #             diag_txt = ""
-    #             if diag:
-    #                 diag_txt = (f" (radio {diag['iface']}: level {diag['level_dbm']:.0f} dBm, "
-    #                             f"quality {diag['quality']:.0f})")
-
-    #             if route_up and now - last_probe >= WIFI_PROBE_INTERVAL_S:
-    #                 last_probe = now
-    #                 gw = wifi_gateway_ip()
-    #                 if gw is None:
-    #                     # Route exists but no usable gateway — can't judge the
-    #                     # link, so never count it as a failed probe.
-    #                     if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
-    #                         print(f"📡 link ok: default route without gateway{diag_txt}")
-    #                         last_diag_log = now
-    #                 elif _PING_BIN is None:
-    #                     if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
-    #                         print(f"📡 link ok: route present, ping unavailable{diag_txt}")
-    #                         last_diag_log = now
-    #                 else:
-    #                     rtt = ping_rtt_ms(gw)
-    #                     if rtt is not None:
-    #                         if probe_fails:
-    #                             print(f"✅ Wi-Fi gateway {gw} reachable again after {probe_fails} failed probe(s)")
-    #                         probe_fails = 0
-    #                         if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
-    #                             print(f"📡 link ok: gw {gw} rtt {rtt:.0f} ms{diag_txt}")
-    #                             last_diag_log = now
-    #                     else:
-    #                         probe_fails += 1
-    #                         print(f"📡 Wi-Fi probe {probe_fails}/{WIFI_PROBE_FAIL_LIMIT}: gateway {gw} unreachable{diag_txt}")
-
-    #             link_dead = (not route_up) or probe_fails >= WIFI_PROBE_FAIL_LIMIT
-    #             if link_dead:
-    #                 if link_down_since is None:
-    #                     link_down_since = now
-    #                     recover_attempts = 0
-    #                     last_recover = 0.0
-    #                 elapsed = now - link_down_since
-    #                 moving = is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn()
-    #                 if elapsed >= LINK_DOWN_STOP_SEC and not link_stop_done and moving:
-    #                     print(f"📡 WI-FI LINK LOST {elapsed:.0f}s - emergency stop (operator cannot reach the rover)")
-    #                     emergency_stop_rover("Wi-Fi link lost")
-    #                     link_stop_done = True
-    #                 elif not link_down_logged and not moving and elapsed >= LINK_DOWN_STOP_SEC:
-    #                     print(f"📡 Wi-Fi link down {elapsed:.0f}s (rover idle, waiting for recovery){diag_txt}")
-    #                     link_down_logged = True
-
-    #                 # Self-recovery: radio bounce first, escalate to a full
-    #                 # NetworkManager restart from the 3rd attempt (that
-    #                 # recovers the wedged-scan-firmware case).  Never while
-    #                 # moving — the radio stays untouched under the operator's
-    #                 # feet; the link guard already stopped the rover above.
-    #                 if (WIFI_RECOVER_AFTER_SEC > 0 and not moving
-    #                         and elapsed >= WIFI_RECOVER_AFTER_SEC
-    #                         and now - last_recover >= WIFI_RECOVER_COOLDOWN_S):
-    #                     recover_attempts += 1
-    #                     last_recover = now
-    #                     escalate = recover_attempts >= 3
-    #                     action = "NetworkManager restart" if escalate else "radio bounce"
-    #                     print(f"🔁 Wi-Fi self-recovery #{recover_attempts} ({action}) - link dead {elapsed:.0f}s{diag_txt}")
-    #                     if _wifi_recovery_attempt(escalate):
-    #                         print(f"   ↳ {action} commands issued; waiting for rejoin")
-    #             elif link_down_since is not None:
-    #                 if now - link_down_since >= 3.0:
-    #                     print(f"✅ Wi-Fi link restored after {now - link_down_since:.0f}s")
-    #                 link_down_since = None
-    #                 link_down_logged = False
-    #                 link_stop_done = False
-    #                 probe_fails = 0
-    #                 recover_attempts = 0
-    #     except Exception as exc:
-    #         print(f"⚠️ Memory watchdog error: {exc}")
-    #         time.sleep(WATCHDOG_TICK_SLOW)
-
-
 def _atexit_stop():
     """Cut motors/pump on any orderly exit (Ctrl-C, systemctl stop, crash)."""
     try:
@@ -923,8 +538,6 @@ def _sigterm_handler(signum, frame):
 
 
 def broadcast_telemetry(payload=None):
-    if not HAS_SOCK:
-        return
     if payload is None:
         payload = get_telemetry_payload()
     msg = json.dumps({"type": "telemetry", "data": payload})
@@ -969,12 +582,7 @@ def start_background_threads():
             nav_thread.start()
             app.navigation_thread_started = True
 
-        # if not getattr(app, 'memory_watchdog_started', False):
-        #     mem_thread = threading.Thread(target=memory_watchdog_loop, daemon=True)
-        #     mem_thread.start()
-        #     app.memory_watchdog_started = True
-
-        if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
+        if not getattr(app, 'ws_broadcast_started', False):
             ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
             ws_thread.start()
             app.ws_broadcast_started = True
@@ -991,128 +599,127 @@ def set_static_cache_headers(response):
     return response
 
 # WebSocket Endpoint
-if HAS_SOCK:
-    @sock.route('/ws')
-    def ws_handler(ws):
-        with clients_lock:
-            if len(connected_clients) >= MAX_WS_CLIENTS:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-                return
-        client = WSClientWrapper(ws)
-        with clients_lock:
-            connected_clients.add(client)
-        print(f"⚡ WebSocket client connected. Active clients: {len(connected_clients)}")
+@sock.route('/ws')
+def ws_handler(ws):
+    with clients_lock:
+        if len(connected_clients) >= MAX_WS_CLIENTS:
+            try:
+                ws.close()
+            except Exception:
+                pass
+            return
+    client = WSClientWrapper(ws)
+    with clients_lock:
+        connected_clients.add(client)
+    print(f"⚡ WebSocket client connected. Active clients: {len(connected_clients)}")
 
-        # Send immediate initial telemetry and connection acknowledgment to client
-        try:
-            client.send(json.dumps({
-                "type": "connection_ack",
-                "reconnected": True,
-                "data": get_telemetry_payload()
-            }))
-        except Exception:
-            pass
+    # Send immediate initial telemetry and connection acknowledgment to client
+    try:
+        client.send(json.dumps({
+            "type": "connection_ack",
+            "reconnected": True,
+            "data": get_telemetry_payload()
+        }))
+    except Exception:
+        pass
 
-        last_activity = time.time()
-        # Disconnect sockets that stop sending (the frontend pings every 2 s).
-        # 10 s rides out short radio stalls seen in the field without letting a
-        # driven rover run blind for long.  Override: WS_HEARTBEAT_TIMEOUT_SEC.
-        CLIENT_HEARTBEAT_TIMEOUT_SEC = float(os.environ.get("WS_HEARTBEAT_TIMEOUT_SEC", "10"))
-        ping_gap_warned = False
+    last_activity = time.time()
+    # Disconnect sockets that stop sending (the frontend pings every 2 s).
+    # 10 s rides out short radio stalls seen in the field without letting a
+    # driven rover run blind for long.  Override: WS_HEARTBEAT_TIMEOUT_SEC.
+    CLIENT_HEARTBEAT_TIMEOUT_SEC = float(os.environ.get("WS_HEARTBEAT_TIMEOUT_SEC", "10"))
+    ping_gap_warned = False
 
-        try:
-            while True:
-                msg = ws.receive(timeout=0.2)
-                now = time.time()
+    try:
+        while True:
+            msg = ws.receive(timeout=0.2)
+            now = time.time()
 
-                if msg is None:
-                    gap = now - last_activity
-                    if gap > CLIENT_HEARTBEAT_TIMEOUT_SEC:
-                        print(f"⚠️ WebSocket client silent {gap:.0f}s - dropping connection")
-                        break
-                    if gap >= 4.0 and not ping_gap_warned:
-                        print(f"⚠️ WS ping gap {gap:.0f}s - client messages stalled (radio path?)")
-                        ping_gap_warned = True
+            if msg is None:
+                gap = now - last_activity
+                if gap > CLIENT_HEARTBEAT_TIMEOUT_SEC:
+                    print(f"⚠️ WebSocket client silent {gap:.0f}s - dropping connection")
+                    break
+                if gap >= 4.0 and not ping_gap_warned:
+                    print(f"⚠️ WS ping gap {gap:.0f}s - client messages stalled (radio path?)")
+                    ping_gap_warned = True
+                continue
+
+            if ping_gap_warned:
+                print(f"✅ WS messages resumed after {now - last_activity:.0f}s stall")
+                ping_gap_warned = False
+            last_activity = now
+
+            try:
+                data = json.loads(msg) if isinstance(msg, str) else json.loads(msg.decode('utf-8'))
+                cmd_type = data.get("type")
+                response = {"type": "response", "success": True, "command": cmd_type}
+
+                if cmd_type in _PROTECTED_WS_COMMANDS and not _pin_ok(data.get("pin")):
+                    response["success"] = False
+                    response["error"] = "PIN required"
+                    response["message"] = "PIN required — set it in the sidebar"
+                    client.send(json.dumps(response))
                     continue
 
-                if ping_gap_warned:
-                    print(f"✅ WS messages resumed after {now - last_activity:.0f}s stall")
-                    ping_gap_warned = False
-                last_activity = now
+                if cmd_type == "motor":
+                    speed = data.get("speed", 0)
+                    direction = data.get("dir", "forward")
+                    status = handle_motor(speed, direction)
+                    response["status"] = status
+                elif cmd_type == "sensor_deploy":
+                    res = handle_sensor_deploy(data.get("action"))
+                    response.update(res)
+                elif cmd_type == "pump":
+                    res = handle_water_pump(data.get("action"))
+                    response.update(res)
+                elif cmd_type == "auto_mode":
+                    res = handle_auto_mode(data.get("action"))
+                    response.update(res)
+                elif cmd_type == "auto_speed":
+                    res = handle_set_auto_speed(data.get("speed_pct", 70))
+                    response.update(res)
+                elif cmd_type == "camera_tilt":
+                    angle = handle_camera_tilt(data.get("direction"))
+                    response["current_angle"] = angle
+                elif cmd_type == "ultrasonic":
+                    res = handle_ultrasonic(data.get("action"))
+                    response.update(res)
+                elif cmd_type == "get_status":
+                    pass
+                elif cmd_type == "ping":
+                    response["type"] = "pong"
+                else:
+                    response["success"] = False
+                    response["message"] = f"Unknown command '{cmd_type}'"
 
-                try:
-                    data = json.loads(msg) if isinstance(msg, str) else json.loads(msg.decode('utf-8'))
-                    cmd_type = data.get("type")
-                    response = {"type": "response", "success": True, "command": cmd_type}
+                response["telemetry"] = get_telemetry_payload()
+                client.send(json.dumps(response))
 
-                    if cmd_type in _PROTECTED_WS_COMMANDS and not _pin_ok(data.get("pin")):
-                        response["success"] = False
-                        response["error"] = "PIN required"
-                        response["message"] = "PIN required — set it in the sidebar"
-                        client.send(json.dumps(response))
-                        continue
+                if cmd_type not in ("ping", "get_status"):
+                    broadcast_telemetry(response["telemetry"])
 
-                    if cmd_type == "motor":
-                        speed = data.get("speed", 0)
-                        direction = data.get("dir", "forward")
-                        status = handle_motor(speed, direction)
-                        response["status"] = status
-                    elif cmd_type == "sensor_deploy":
-                        res = handle_sensor_deploy(data.get("action"))
-                        response.update(res)
-                    elif cmd_type == "pump":
-                        res = handle_water_pump(data.get("action"))
-                        response.update(res)
-                    elif cmd_type == "auto_mode":
-                        res = handle_auto_mode(data.get("action"))
-                        response.update(res)
-                    elif cmd_type == "auto_speed":
-                        res = handle_set_auto_speed(data.get("speed_pct", 70))
-                        response.update(res)
-                    elif cmd_type == "camera_tilt":
-                        angle = handle_camera_tilt(data.get("direction"))
-                        response["current_angle"] = angle
-                    elif cmd_type == "ultrasonic":
-                        res = handle_ultrasonic(data.get("action"))
-                        response.update(res)
-                    elif cmd_type == "get_status":
-                        pass
-                    elif cmd_type == "ping":
-                        response["type"] = "pong"
-                    else:
-                        response["success"] = False
-                        response["message"] = f"Unknown command '{cmd_type}'"
+            except json.JSONDecodeError:
+                client.send(json.dumps({"type": "error", "message": "Invalid JSON format"}))
+            except Exception as ex:
+                client.send(json.dumps({"type": "error", "message": str(ex)}))
 
-                    response["telemetry"] = get_telemetry_payload()
-                    client.send(json.dumps(response))
+    except (simple_websocket.ConnectionClosed, simple_websocket.ConnectionError):
+        pass
+    except Exception as e:
+        print(f"⚠️ WebSocket connection exception: {e}")
+    finally:
+        with clients_lock:
+            connected_clients.discard(client)
+            remaining = len(connected_clients)
+        print(f"🔌 WebSocket client disconnected. Remaining: {remaining}")
 
-                    if cmd_type not in ("ping", "get_status"):
-                        broadcast_telemetry(response["telemetry"])
+        # Stop all rover actions immediately on user disconnect
+        emergency_stop_rover("user disconnected from WebSocket")
 
-                except json.JSONDecodeError:
-                    client.send(json.dumps({"type": "error", "message": "Invalid JSON format"}))
-                except Exception as ex:
-                    client.send(json.dumps({"type": "error", "message": str(ex)}))
-
-        except (simple_websocket.ConnectionClosed, simple_websocket.ConnectionError):
-            pass
-        except Exception as e:
-            print(f"⚠️ WebSocket connection exception: {e}")
-        finally:
-            with clients_lock:
-                connected_clients.discard(client)
-                remaining = len(connected_clients)
-            print(f"🔌 WebSocket client disconnected. Remaining: {remaining}")
-
-            # Stop all rover actions immediately on user disconnect
-            emergency_stop_rover("user disconnected from WebSocket")
-
-            # Broadcast stopped telemetry to any remaining clients
-            if remaining > 0:
-                broadcast_telemetry()
+        # Broadcast stopped telemetry to any remaining clients
+        if remaining > 0:
+            broadcast_telemetry()
 
 # ----------------- Existing HTTP Endpoints (Preserved) -----------------
 
