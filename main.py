@@ -751,7 +751,7 @@ def _dump_mem_history():
         print(f"   {entry}")
 
 
-def memory_watchdog_loop():
+# def memory_watchdog_loop():
     """Shed load on low memory and stop the rover if the operator link dies.
     Runs for manual AND systemd launches: the unit's MemoryMax/OOMScoreAdjust
     only exist under systemd, so this in-process guard plus the startup
@@ -770,139 +770,139 @@ def memory_watchdog_loop():
     recover_attempts = 0
     last_recover = 0.0
     tick = WATCHDOG_TICK_SLOW
-    while True:
-        try:
-            time.sleep(tick)
-            mem = read_meminfo()
-            if mem is None:
-                continue
-            avail = mem["mem_available_mb"]
-            rss = read_self_rss_mb()
-            rss_txt = f", rover RSS {rss:.0f} MB" if rss is not None else ""
-            _mem_history.append(
-                f"{time.strftime('%H:%M:%S')} avail={avail:.0f}MB "
-                f"rss={rss if rss is not None else '?'}MB "
-                f"swap={mem.get('swap_used_mb', 0.0):.0f}MB"
-            )
-            del _mem_history[:-90]
-            tick = WATCHDOG_TICK_FAST if avail < MEM_EARLY_MB else WATCHDOG_TICK_SLOW
+    # while True:
+    #     try:
+    #         time.sleep(tick)
+    #         mem = read_meminfo()
+    #         if mem is None:
+    #             continue
+    #         avail = mem["mem_available_mb"]
+    #         rss = read_self_rss_mb()
+    #         rss_txt = f", rover RSS {rss:.0f} MB" if rss is not None else ""
+    #         _mem_history.append(
+    #             f"{time.strftime('%H:%M:%S')} avail={avail:.0f}MB "
+    #             f"rss={rss if rss is not None else '?'}MB "
+    #             f"swap={mem.get('swap_used_mb', 0.0):.0f}MB"
+    #         )
+    #         del _mem_history[:-90]
+    #         tick = WATCHDOG_TICK_FAST if avail < MEM_EARLY_MB else WATCHDOG_TICK_SLOW
 
-            # Early breadcrumb: start reclaiming before the shed threshold.
-            if avail < MEM_EARLY_MB and not _mem_early_logged:
-                print(f"🔎 MEMORY WATCH: {avail:.0f} MB available{rss_txt} - collecting garbage")
-                gc.collect()
-                _mem_early_logged = True
-            elif avail > MEM_EARLY_MB + 20:
-                _mem_early_logged = False
+    #         # Early breadcrumb: start reclaiming before the shed threshold.
+    #         if avail < MEM_EARLY_MB and not _mem_early_logged:
+    #             print(f"🔎 MEMORY WATCH: {avail:.0f} MB available{rss_txt} - collecting garbage")
+    #             gc.collect()
+    #             _mem_early_logged = True
+    #         elif avail > MEM_EARLY_MB + 20:
+    #             _mem_early_logged = False
 
-            # Camera is the biggest optional consumer: shed it first.  Also
-            # shed again if the dashboard reconnected it while still low.
-            if avail < MEM_WARN_MB and (not _mem_warned or camera_stream.clients >= 1):
-                print(f"⚠️ LOW MEMORY: {avail:.0f} MB available{rss_txt} - shedding camera stream")
-                if not _hist_dumped:
-                    _dump_mem_history()
-                    _hist_dumped = True
-                camera_stream.stop("low memory", cooldown_sec=60.0)
-                gc.collect()
+    #         # Camera is the biggest optional consumer: shed it first.  Also
+    #         # shed again if the dashboard reconnected it while still low.
+    #         if avail < MEM_WARN_MB and (not _mem_warned or camera_stream.clients >= 1):
+    #             print(f"⚠️ LOW MEMORY: {avail:.0f} MB available{rss_txt} - shedding camera stream")
+    #             if not _hist_dumped:
+    #                 _dump_mem_history()
+    #                 _hist_dumped = True
+    #             camera_stream.stop("low memory", cooldown_sec=60.0)
+    #             gc.collect()
 
-            # Never let the rover keep driving on a starved board.
-            if (avail < MEM_CRITICAL_MB and
-                    (is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn())):
-                print(f"🛑 CRITICAL MEMORY: {avail:.0f} MB available{rss_txt} - emergency stop")
-                _dump_mem_history()
-                emergency_stop_rover(f"low memory ({avail:.0f} MB)")
-                camera_stream.stop("memory critical", cooldown_sec=120.0)
-                gc.collect()
+    #         # Never let the rover keep driving on a starved board.
+    #         if (avail < MEM_CRITICAL_MB and
+    #                 (is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn())):
+    #             print(f"🛑 CRITICAL MEMORY: {avail:.0f} MB available{rss_txt} - emergency stop")
+    #             _dump_mem_history()
+    #             emergency_stop_rover(f"low memory ({avail:.0f} MB)")
+    #             camera_stream.stop("memory critical", cooldown_sec=120.0)
+    #             gc.collect()
 
-            _mem_warned = avail < MEM_WARN_MB
-            if avail >= MEM_WARN_MB:
-                _hist_dumped = False
+    #         _mem_warned = avail < MEM_WARN_MB
+    #         if avail >= MEM_WARN_MB:
+    #             _hist_dumped = False
 
-            # Operator link guard + link diagnostics + self-recovery:
-            # Wi-Fi death used to strand a moving rover with no kill switch
-            # (brcmfmac starves first under memory pressure).  Route checks
-            # catch a dropped link; periodic gateway pings additionally catch
-            # the SILENT brcmfmac hang (route still present, traffic dead,
-            # journal empty) seen in the field.  After a dead-link grace
-            # period the Wi-Fi radio is bounced automatically instead of
-            # waiting for a power cycle.
-            if link != "absent":
-                now = time.monotonic()
-                route_up = wifi_link_state() == "up"
-                diag = read_wireless_stats()
-                diag_txt = ""
-                if diag:
-                    diag_txt = (f" (radio {diag['iface']}: level {diag['level_dbm']:.0f} dBm, "
-                                f"quality {diag['quality']:.0f})")
+    #         # Operator link guard + link diagnostics + self-recovery:
+    #         # Wi-Fi death used to strand a moving rover with no kill switch
+    #         # (brcmfmac starves first under memory pressure).  Route checks
+    #         # catch a dropped link; periodic gateway pings additionally catch
+    #         # the SILENT brcmfmac hang (route still present, traffic dead,
+    #         # journal empty) seen in the field.  After a dead-link grace
+    #         # period the Wi-Fi radio is bounced automatically instead of
+    #         # waiting for a power cycle.
+    #         if link != "absent":
+    #             now = time.monotonic()
+    #             route_up = wifi_link_state() == "up"
+    #             diag = read_wireless_stats()
+    #             diag_txt = ""
+    #             if diag:
+    #                 diag_txt = (f" (radio {diag['iface']}: level {diag['level_dbm']:.0f} dBm, "
+    #                             f"quality {diag['quality']:.0f})")
 
-                if route_up and now - last_probe >= WIFI_PROBE_INTERVAL_S:
-                    last_probe = now
-                    gw = wifi_gateway_ip()
-                    if gw is None:
-                        # Route exists but no usable gateway — can't judge the
-                        # link, so never count it as a failed probe.
-                        if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
-                            print(f"📡 link ok: default route without gateway{diag_txt}")
-                            last_diag_log = now
-                    elif _PING_BIN is None:
-                        if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
-                            print(f"📡 link ok: route present, ping unavailable{diag_txt}")
-                            last_diag_log = now
-                    else:
-                        rtt = ping_rtt_ms(gw)
-                        if rtt is not None:
-                            if probe_fails:
-                                print(f"✅ Wi-Fi gateway {gw} reachable again after {probe_fails} failed probe(s)")
-                            probe_fails = 0
-                            if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
-                                print(f"📡 link ok: gw {gw} rtt {rtt:.0f} ms{diag_txt}")
-                                last_diag_log = now
-                        else:
-                            probe_fails += 1
-                            print(f"📡 Wi-Fi probe {probe_fails}/{WIFI_PROBE_FAIL_LIMIT}: gateway {gw} unreachable{diag_txt}")
+    #             if route_up and now - last_probe >= WIFI_PROBE_INTERVAL_S:
+    #                 last_probe = now
+    #                 gw = wifi_gateway_ip()
+    #                 if gw is None:
+    #                     # Route exists but no usable gateway — can't judge the
+    #                     # link, so never count it as a failed probe.
+    #                     if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
+    #                         print(f"📡 link ok: default route without gateway{diag_txt}")
+    #                         last_diag_log = now
+    #                 elif _PING_BIN is None:
+    #                     if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
+    #                         print(f"📡 link ok: route present, ping unavailable{diag_txt}")
+    #                         last_diag_log = now
+    #                 else:
+    #                     rtt = ping_rtt_ms(gw)
+    #                     if rtt is not None:
+    #                         if probe_fails:
+    #                             print(f"✅ Wi-Fi gateway {gw} reachable again after {probe_fails} failed probe(s)")
+    #                         probe_fails = 0
+    #                         if WIFI_DIAG_LOG_EVERY_S and now - last_diag_log >= WIFI_DIAG_LOG_EVERY_S:
+    #                             print(f"📡 link ok: gw {gw} rtt {rtt:.0f} ms{diag_txt}")
+    #                             last_diag_log = now
+    #                     else:
+    #                         probe_fails += 1
+    #                         print(f"📡 Wi-Fi probe {probe_fails}/{WIFI_PROBE_FAIL_LIMIT}: gateway {gw} unreachable{diag_txt}")
 
-                link_dead = (not route_up) or probe_fails >= WIFI_PROBE_FAIL_LIMIT
-                if link_dead:
-                    if link_down_since is None:
-                        link_down_since = now
-                        recover_attempts = 0
-                        last_recover = 0.0
-                    elapsed = now - link_down_since
-                    moving = is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn()
-                    if elapsed >= LINK_DOWN_STOP_SEC and not link_stop_done and moving:
-                        print(f"📡 WI-FI LINK LOST {elapsed:.0f}s - emergency stop (operator cannot reach the rover)")
-                        emergency_stop_rover("Wi-Fi link lost")
-                        link_stop_done = True
-                    elif not link_down_logged and not moving and elapsed >= LINK_DOWN_STOP_SEC:
-                        print(f"📡 Wi-Fi link down {elapsed:.0f}s (rover idle, waiting for recovery){diag_txt}")
-                        link_down_logged = True
+    #             link_dead = (not route_up) or probe_fails >= WIFI_PROBE_FAIL_LIMIT
+    #             if link_dead:
+    #                 if link_down_since is None:
+    #                     link_down_since = now
+    #                     recover_attempts = 0
+    #                     last_recover = 0.0
+    #                 elapsed = now - link_down_since
+    #                 moving = is_auto_active() or motor_status != "STOPPED" or WATER_PUMP.isPumpOn()
+    #                 if elapsed >= LINK_DOWN_STOP_SEC and not link_stop_done and moving:
+    #                     print(f"📡 WI-FI LINK LOST {elapsed:.0f}s - emergency stop (operator cannot reach the rover)")
+    #                     emergency_stop_rover("Wi-Fi link lost")
+    #                     link_stop_done = True
+    #                 elif not link_down_logged and not moving and elapsed >= LINK_DOWN_STOP_SEC:
+    #                     print(f"📡 Wi-Fi link down {elapsed:.0f}s (rover idle, waiting for recovery){diag_txt}")
+    #                     link_down_logged = True
 
-                    # Self-recovery: radio bounce first, escalate to a full
-                    # NetworkManager restart from the 3rd attempt (that
-                    # recovers the wedged-scan-firmware case).  Never while
-                    # moving — the radio stays untouched under the operator's
-                    # feet; the link guard already stopped the rover above.
-                    if (WIFI_RECOVER_AFTER_SEC > 0 and not moving
-                            and elapsed >= WIFI_RECOVER_AFTER_SEC
-                            and now - last_recover >= WIFI_RECOVER_COOLDOWN_S):
-                        recover_attempts += 1
-                        last_recover = now
-                        escalate = recover_attempts >= 3
-                        action = "NetworkManager restart" if escalate else "radio bounce"
-                        print(f"🔁 Wi-Fi self-recovery #{recover_attempts} ({action}) - link dead {elapsed:.0f}s{diag_txt}")
-                        if _wifi_recovery_attempt(escalate):
-                            print(f"   ↳ {action} commands issued; waiting for rejoin")
-                elif link_down_since is not None:
-                    if now - link_down_since >= 3.0:
-                        print(f"✅ Wi-Fi link restored after {now - link_down_since:.0f}s")
-                    link_down_since = None
-                    link_down_logged = False
-                    link_stop_done = False
-                    probe_fails = 0
-                    recover_attempts = 0
-        except Exception as exc:
-            print(f"⚠️ Memory watchdog error: {exc}")
-            time.sleep(WATCHDOG_TICK_SLOW)
+    #                 # Self-recovery: radio bounce first, escalate to a full
+    #                 # NetworkManager restart from the 3rd attempt (that
+    #                 # recovers the wedged-scan-firmware case).  Never while
+    #                 # moving — the radio stays untouched under the operator's
+    #                 # feet; the link guard already stopped the rover above.
+    #                 if (WIFI_RECOVER_AFTER_SEC > 0 and not moving
+    #                         and elapsed >= WIFI_RECOVER_AFTER_SEC
+    #                         and now - last_recover >= WIFI_RECOVER_COOLDOWN_S):
+    #                     recover_attempts += 1
+    #                     last_recover = now
+    #                     escalate = recover_attempts >= 3
+    #                     action = "NetworkManager restart" if escalate else "radio bounce"
+    #                     print(f"🔁 Wi-Fi self-recovery #{recover_attempts} ({action}) - link dead {elapsed:.0f}s{diag_txt}")
+    #                     if _wifi_recovery_attempt(escalate):
+    #                         print(f"   ↳ {action} commands issued; waiting for rejoin")
+    #             elif link_down_since is not None:
+    #                 if now - link_down_since >= 3.0:
+    #                     print(f"✅ Wi-Fi link restored after {now - link_down_since:.0f}s")
+    #                 link_down_since = None
+    #                 link_down_logged = False
+    #                 link_stop_done = False
+    #                 probe_fails = 0
+    #                 recover_attempts = 0
+    #     except Exception as exc:
+    #         print(f"⚠️ Memory watchdog error: {exc}")
+    #         time.sleep(WATCHDOG_TICK_SLOW)
 
 
 def _atexit_stop():
@@ -969,10 +969,10 @@ def start_background_threads():
             nav_thread.start()
             app.navigation_thread_started = True
 
-        if not getattr(app, 'memory_watchdog_started', False):
-            mem_thread = threading.Thread(target=memory_watchdog_loop, daemon=True)
-            mem_thread.start()
-            app.memory_watchdog_started = True
+        # if not getattr(app, 'memory_watchdog_started', False):
+        #     mem_thread = threading.Thread(target=memory_watchdog_loop, daemon=True)
+        #     mem_thread.start()
+        #     app.memory_watchdog_started = True
 
         if HAS_SOCK and not getattr(app, 'ws_broadcast_started', False):
             ws_thread = threading.Thread(target=ws_telemetry_broadcast_loop, daemon=True)
