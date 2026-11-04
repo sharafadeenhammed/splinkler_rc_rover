@@ -13,47 +13,12 @@ import gc
 import hmac
 import shutil
 
-# Line-buffer stdout: under systemd stdout is a journald socket and print()
-# output stays block-buffered for hours, hiding the memory watchdog's alerts
-# exactly when the operator needs to see them.  TTY (manual) runs unaffected.
-try:
-    sys.stdout.reconfigure(line_buffering=True)
-except (AttributeError, ValueError, OSError):
-    pass
-
-# When launched manually (`python main.py`) there is no systemd unit to set
-# OOMScoreAdjust=200, so on a global OOM the kernel may kill wpa_supplicant /
-# dhcpcd first — or brcmfmac simply starves — and Wi-Fi dies until a power
-# cycle.  Raising our own OOM score needs no root, so in a manual run the
-# rover is always killed first and the network stack survives.  Under systemd
-# INVOCATION_ID is set and the unit's OOMScoreAdjust owns this setting.
-if "INVOCATION_ID" not in os.environ:
-    try:
-        with open("/proc/self/oom_score_adj", "w") as _oom_handle:
-            _oom_handle.write("500\n")
-        with open("/proc/self/oom_score_adj", "r") as _oom_handle:
-            _oom_value = _oom_handle.read().strip()
-        print(f"🛡️ Manual run: oom_score_adj=+{_oom_value} (rover dies first on OOM, Wi-Fi survives)")
-    except OSError as _oom_err:
-        print(f"⚠️ Could not raise oom_score_adj: {_oom_err}")
-
 from flask import Flask, Response, render_template, request, jsonify
+from flask_sock import Sock
+import simple_websocket
 
-# Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
-try:
-    os.nice(10)
-except (OSError, AttributeError):
-    pass
+HAS_SOCK = True 
 
-try:
-    from flask_sock import Sock
-    import simple_websocket
-    HAS_SOCK = True
-except ImportError:
-    HAS_SOCK = False
-    Sock = None
-    simple_websocket = None
-    print("⚠️ flask-sock not installed. WebSocket functionality will be disabled.")
 
 from helpers import (
     forward, reverse, turnRight, turnLeft, stop,
@@ -78,6 +43,53 @@ from helpers import motor_controls
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
 from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
+
+# Line-buffer stdout: under systemd stdout is a journald socket and print()
+# output stays block-buffered for hours, hiding the memory watchdog's alerts
+# exactly when the operator needs to see them.  TTY (manual) runs unaffected.
+
+# try:
+#     sys.stdout.reconfigure(line_buffering=True)
+# except (AttributeError, ValueError, OSError):
+#     pass
+
+
+# When launched manually (`python main.py`) there is no systemd unit to set
+# OOMScoreAdjust=200, so on a global OOM the kernel may kill wpa_supplicant /
+# dhcpcd first — or brcmfmac simply starves — and Wi-Fi dies until a power
+# cycle.  Raising our own OOM score needs no root, so in a manual run the
+# rover is always killed first and the network stack survives.  Under systemd
+# INVOCATION_ID is set and the unit's OOMScoreAdjust owns this setting.
+
+# if "INVOCATION_ID" not in os.environ:
+#     try:
+#         with open("/proc/self/oom_score_adj", "w") as _oom_handle:
+#             _oom_handle.write("500\n")
+#         with open("/proc/self/oom_score_adj", "r") as _oom_handle:
+#             _oom_value = _oom_handle.read().strip()
+#         print(f"🛡️ Manual run: oom_score_adj=+{_oom_value} (rover dies first on OOM, Wi-Fi survives)")
+#     except OSError as _oom_err:
+#         print(f"⚠️ Could not raise oom_score_adj: {_oom_err}")
+
+
+
+# Run at lower priority so SSH / Wi-Fi always get CPU first on the single-core Zero W.
+# try:
+#     os.nice(10)
+# except (OSError, AttributeError):
+#     pass
+
+# try:
+#     from flask_sock import Sock
+#     import simple_websocket
+#     HAS_SOCK = True
+# except ImportError:
+#     HAS_SOCK = False
+#     Sock = None
+#     simple_websocket = None
+#     print("⚠️ flask-sock not installed. WebSocket functionality will be disabled.")
+
+
 
 app = Flask(__name__)
 sock = Sock(app) if HAS_SOCK else None
@@ -120,7 +132,7 @@ sensor_data = {
 data_lock = threading.Lock()
 clients_lock = threading.Lock()
 connected_clients = set()
-MAX_WS_CLIENTS = 2
+MAX_WS_CLIENTS = 1
 pose_tracker = PoseTracker(WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
 saved_area = DB.active_area()
 saved_map_origin = DB.map_origin()
