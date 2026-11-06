@@ -21,7 +21,7 @@ from helpers import (
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed,
-    set_area_polygon,
+    set_area_polygon, set_pose_provider,
     get_encoder_ticks, encoder_config
 )
 from helpers.mpu6050 import (
@@ -80,6 +80,9 @@ clients_lock = threading.Lock()
 connected_clients = set()
 MAX_WS_CLIENTS = 1
 pose_tracker = PoseTracker(WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV)
+# The autonomous controller follows the same fused pose the dashboard shows
+# instead of keeping its own tick bookkeeping.
+set_pose_provider(pose_tracker.snapshot)
 saved_area = DB.active_area()
 saved_map_origin = DB.map_origin()
 _map_origin_cache = {"value": saved_map_origin}

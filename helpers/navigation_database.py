@@ -173,7 +173,20 @@ class PoseTracker:
         self.origin_lon = None
         self._gps_position_active = False
         self._gps_heading_active = False
+        self._gps_heading_enabled = True
         self._fusion_note = "odometry"
+
+    def set_gps_heading_blend(self, enabled=True):
+        """Allow or block GPS course from pulling the heading around.
+
+        Autonomous following closes its turns on the gyro and measures
+        cross-track error against that heading, so a course blend fighting it
+        mid-strip makes the rover weave.  Position fusion stays active.
+        """
+        with self.lock:
+            self._gps_heading_enabled = bool(enabled)
+            if not enabled:
+                self._gps_heading_active = False
 
     def set_map_origin(self, latitude, longitude):
         with self.lock:
@@ -219,7 +232,7 @@ class PoseTracker:
         self._gps_position_active = True
         self._fusion_note = "gps_encoders_imu"
 
-        if gps_heading_usable(gps):
+        if self._gps_heading_enabled and gps_heading_usable(gps):
             course_rad = math.radians(float(gps["course_deg"]))
             self.heading_rad = angle_lerp(self.heading_rad, course_rad, GPS_HEADING_BETA)
             self._gps_heading_active = True
