@@ -31,7 +31,8 @@ from helpers.mpu6050 import (
 from helpers.hmc5883l import (
     get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
-from helpers.pose_fusion import gps_heading_usable, geo_to_local
+from helpers.pose_fusion import gps_heading_usable, geo_to_local, local_to_geo
+from helpers.auto_plan import offsets_world_polygon
 from helpers import motor_controls
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
@@ -737,6 +738,55 @@ def save_polygon_work_area():
         set_area_polygon(points)
         _area_cache["ts"] = 0.0
         return jsonify({"success": True, "area": area, "coverage_mode": "polygon"}), 201
+    except (TypeError, ValueError, KeyError, IndexError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+
+@app.route('/api/areas/offsets', methods=['POST'])
+def save_offset_work_area():
+    """Work area sized from the rover: forward/back/left/right metres."""
+    if is_auto_active():
+        return jsonify({"success": False, "error": "Stop autonomous mode before changing the work area"}), 409
+    payload = request.get_json(silent=True) or {}
+    try:
+        distances = {}
+        for key in ("forward", "back", "left", "right"):
+            raw = payload.get(key, 0)
+            value = 0.0 if raw is None or raw == "" else float(raw)
+            if not math.isfinite(value) or not 0.0 <= value <= 25.0:
+                raise ValueError("Each distance must be between 0 and 25 m")
+            distances[key] = value
+
+        origin = payload.get("origin") or _map_origin_cache["value"]
+        if not isinstance(origin, (list, tuple)) or len(origin) != 2:
+            raise ValueError("Set the rover start on the map before sizing the area")
+        if not (-85 <= float(origin[0]) <= 85 and -180 <= float(origin[1]) <= 180):
+            raise ValueError("Rover start must be a valid latitude/longitude coordinate")
+
+        # Place the box where the rover is standing right now, so what the user
+        # measured around the rover is what the mission drives.
+        pose = pose_tracker.snapshot()
+        polygon = offsets_world_polygon(
+            distances["forward"], distances["back"], distances["left"], distances["right"],
+            pose["x_m"], pose["y_m"], math.radians(pose.get("heading_deg", 0.0)),
+        )
+        map_points = [
+            list(local_to_geo(x, y, float(origin[0]), float(origin[1])))
+            for x, y in polygon
+        ]
+        area = DB.save_polygon_area(payload.get("name", "Work area"), polygon, map_points, origin)
+        _map_origin_cache["value"] = DB.save_map_origin(origin[0], origin[1])
+        set_area_polygon(polygon)
+        _area_cache["ts"] = 0.0
+        return jsonify({
+            "success": True,
+            "area": area,
+            "coverage_mode": "offsets",
+            "size": {
+                "along_m": round(distances["forward"] + distances["back"], 2),
+                "across_m": round(distances["left"] + distances["right"], 2),
+            },
+        }), 201
     except (TypeError, ValueError, KeyError, IndexError) as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
 

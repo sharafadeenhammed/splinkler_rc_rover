@@ -32,8 +32,10 @@ DEFAULT_SWATH_M = 0.50
 DEFAULT_OVERLAP = 0.10
 # Spans shorter than this are slivers from polygon edges, not worth a pass.
 MIN_SPAN_M = 0.15
+# Smallest work area either way round; below this a mission is not worth starting.
+MIN_AREA_M = 0.5
 # Never command less than this duty: the gearmotors buzz without turning.
-MIN_DUTY = 0.20
+MIN_DUTY = 0.80
 
 
 def wrap_angle(angle):
@@ -56,6 +58,45 @@ def rectangle_polygon(width_m, height_m):
     width_m = max(0.5, float(width_m))
     height_m = max(0.5, float(height_m))
     return [[0.0, 0.0], [width_m, 0.0], [width_m, height_m], [0.0, height_m]]
+
+
+def offsets_polygon(forward, back, left, right):
+    """Rectangle around the rover from four distances, in the rover's frame.
+
+    x runs forward along the heading and y to the left, with the rover at
+    (0, 0), so the box can extend further one way than the other.  Pass the
+    result to offsets_world_polygon() to put it on the map.
+    """
+    try:
+        distances = {
+            "forward": float(forward),
+            "back": float(back),
+            "left": float(left),
+            "right": float(right),
+        }
+    except (TypeError, ValueError):
+        raise ValueError("Distances must be numbers")
+    for name, value in distances.items():
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name.capitalize()} distance must be zero or more")
+    if distances["forward"] + distances["back"] < MIN_AREA_M:
+        raise ValueError(f"Forward plus back must reach {MIN_AREA_M:.1f} m")
+    if distances["left"] + distances["right"] < MIN_AREA_M:
+        raise ValueError(f"Left plus right must reach {MIN_AREA_M:.1f} m")
+    front = distances["forward"]
+    rear = distances["back"]
+    port = distances["left"]
+    starboard = distances["right"]
+    return [[-rear, -starboard], [front, -starboard], [front, port], [-rear, port]]
+
+
+def offsets_world_polygon(forward, back, left, right, origin_x, origin_y, heading_rad):
+    """Offsets rectangle placed on the ground at the rover's pose."""
+    polygon = offsets_polygon(forward, back, left, right)
+    return [
+        list(to_world_point(x, y, origin_x, origin_y, heading_rad))
+        for x, y in polygon
+    ]
 
 
 def strip_spacing(swath_m, overlap=DEFAULT_OVERLAP):
@@ -233,19 +274,20 @@ def strip_segment(strip, index=0):
     }
 
 
-def to_world(segment, origin_x, origin_y, heading_rad):
-    """Rotate/translate an area-frame segment into the rover's world frame."""
+def to_world_point(x, y, origin_x, origin_y, heading_rad):
+    """Rotate/translate one rover-frame point into the world frame."""
     cos_h = math.cos(heading_rad)
     sin_h = math.sin(heading_rad)
+    return (
+        origin_x + x * cos_h - y * sin_h,
+        origin_y + x * sin_h + y * cos_h,
+    )
 
-    def convert(x, y):
-        return (
-            origin_x + x * cos_h - y * sin_h,
-            origin_y + x * sin_h + y * cos_h,
-        )
 
-    x0, y0 = convert(segment["x0"], segment["y0"])
-    x1, y1 = convert(segment["x1"], segment["y1"])
+def to_world(segment, origin_x, origin_y, heading_rad):
+    """Rotate/translate an area-frame segment into the rover's world frame."""
+    x0, y0 = to_world_point(segment["x0"], segment["y0"], origin_x, origin_y, heading_rad)
+    x1, y1 = to_world_point(segment["x1"], segment["y1"], origin_x, origin_y, heading_rad)
     return {
         "index": segment.get("index", 0),
         "x0": x0,
@@ -342,7 +384,11 @@ __all__ = [
     "DEFAULT_SWATH_M",
     "DEFAULT_OVERLAP",
     "MIN_SPAN_M",
+    "MIN_AREA_M",
     "MIN_DUTY",
+    "offsets_polygon",
+    "offsets_world_polygon",
+    "to_world_point",
     "wrap_angle",
     "normalize_polygon",
     "rectangle_polygon",

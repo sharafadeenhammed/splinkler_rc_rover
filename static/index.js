@@ -102,6 +102,7 @@ let leafletMap = null;
 let roverMarker = null;
 let workAreaLayer = null;
 let draftLayer = null;
+let offsetPreviewLayer = null;
 let trailLayer = null;
 let loadedAreaId = null;
 let loadedOrigin = false;
@@ -128,6 +129,7 @@ if (roverMap && window.L) {
   }).addTo(leafletMap);
   workAreaLayer = L.polygon([], { color: "#38d9cf", weight: 2, fillColor: "#38d9cf", fillOpacity: 0.13 }).addTo(leafletMap);
   draftLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "5 5", fillColor: "#f2ba66", fillOpacity: 0.12 }).addTo(leafletMap);
+  offsetPreviewLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "4 4", fillColor: "#f2ba66", fillOpacity: 0.1 }).addTo(leafletMap);
   trailLayer = L.polyline([], { color: "#a78bfa", weight: 3, opacity: 0.8 }).addTo(leafletMap);
   roverMarker = L.marker(mapOrigin, { icon: L.divIcon({ className: "rover-map-marker", html: "<span>▲</span>", iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(leafletMap);
   leafletMap.on("click", (event) => {
@@ -731,6 +733,90 @@ function savePolygonArea() {
       draftLayer.setLatLngs([]);
       if (lastPose) renderRoverMap(lastPose, data.area);
       showToast(`Work area “${data.area.name || name}” saved`);
+    })
+    .catch((error) => showToast(error.message));
+}
+
+function readOffsetDistances() {
+  const read = (id) => {
+    const input = document.getElementById(id);
+    const value = input ? parseFloat(input.value) : 0;
+    if (!Number.isFinite(value)) return 0;
+    return Math.min(25, Math.max(0, value));
+  };
+  return {
+    forward: read("offsetForward"),
+    back: read("offsetBack"),
+    left: read("offsetLeft"),
+    right: read("offsetRight"),
+  };
+}
+
+// Same rectangle the server builds: x runs forward, y to the left, rover at 0, 0.
+function offsetPolygonGeo() {
+  if (!lastPose || !offsetPreviewLayer) return [];
+  const distances = readOffsetDistances();
+  const heading = (lastPose.heading_deg || 0) * Math.PI / 180;
+  const cosH = Math.cos(heading);
+  const sinH = Math.sin(heading);
+  const corners = [
+    [-distances.back, -distances.right],
+    [distances.forward, -distances.right],
+    [distances.forward, distances.left],
+    [-distances.back, distances.left],
+  ];
+  return corners.map(([x, y]) => localToGeo(
+    lastPose.x_m + x * cosH - y * sinH,
+    lastPose.y_m + x * sinH + y * cosH,
+  ));
+}
+
+function previewOffsetArea() {
+  if (!offsetPreviewLayer) return;
+  const points = offsetPolygonGeo();
+  offsetPreviewLayer.setLatLngs(points.length >= 3 ? points : []);
+}
+
+function openOffsetArea() {
+  if (!originSetForWork && !loadedOrigin) {
+    showToast("Tap “Origin here” at the rover before sizing the area");
+    return;
+  }
+  if (!lastPose) {
+    showToast("Waiting for the rover's position");
+    return;
+  }
+  openModal("offsetAreaModal");
+  previewOffsetArea();
+}
+
+function closeOffsetArea() {
+  if (offsetPreviewLayer) offsetPreviewLayer.setLatLngs([]);
+  closeModal("offsetAreaModal");
+}
+
+function saveOffsetArea() {
+  const distances = readOffsetDistances();
+  if (distances.forward + distances.back < 0.5 || distances.left + distances.right < 0.5) {
+    showToast("Forward + back and left + right must each reach 0.5 m");
+    return;
+  }
+  showToast("Saving work area…");
+  const name = (areaNameInput && areaNameInput.value) || "Distance work area";
+  fetch(`${baseURL}/api/areas/offsets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...distances, name, origin: mapOrigin }),
+  }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) throw new Error(data.error || "Could not set the work area");
+      closeOffsetArea();
+      window.activeWorkArea = data.area;
+      loadedAreaId = data.area.id;
+      workAreaLayer.setLatLngs(data.area.map_polygon || []);
+      if (lastPose) renderRoverMap(lastPose, data.area);
+      const size = data.size ? ` · ${data.size.along_m} × ${data.size.across_m} m` : "";
+      showToast(`Work area “${data.area.name || name}” saved${size}`);
     })
     .catch((error) => showToast(error.message));
 }

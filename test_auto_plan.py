@@ -223,6 +223,73 @@ def test_normalize_and_world_transform():
           close(world0["x1"], 5.0) and close(world0["y1"], 4.0))
 
 
+def _distance_to_segment(px, py, segment):
+    dx = segment["x1"] - segment["x0"]
+    dy = segment["y1"] - segment["y0"]
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-12:
+        return math.hypot(px - segment["x0"], py - segment["y0"])
+    t = ((px - segment["x0"]) * dx + (py - segment["y0"]) * dy) / length_sq
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (segment["x0"] + t * dx), py - (segment["y0"] + t * dy))
+
+
+def test_offset_area():
+    """The area can be sized from the rover: forward/back/left/right metres."""
+    print("offset area")
+    polygon = plan.offsets_polygon(3.0, 1.0, 2.0, 0.5)
+    check("rear-right corner", polygon[0] == [-1.0, -0.5], polygon[0])
+    check("front-right corner", polygon[1] == [3.0, -0.5], polygon[1])
+    check("front-left corner", polygon[2] == [3.0, 2.0], polygon[2])
+    check("rear-left corner", polygon[3] == [-1.0, 2.0], polygon[3])
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+    check("asymmetric box spans forward+back by left+right",
+          close((max(xs) - min(xs)) * (max(ys) - min(ys)), 10.0), polygon)
+
+    # The rover stands inside its own box when the offsets surround it.
+    check("rover is inside the offset box", point_in_polygon(0.0, 0.0, polygon))
+
+    # Heading east: forward is +x, left is +y.
+    east = plan.offsets_world_polygon(3.0, 1.0, 2.0, 0.5, 4.0, 6.0, 0.0)
+    check("east-facing box placed at the rover",
+          close(east[0][0], 3.0) and close(east[0][1], 5.5) and
+          close(east[2][0], 7.0) and close(east[2][1], 8.0), east)
+
+    # Heading north: forward is +y, and left is -x (west).
+    north = plan.offsets_world_polygon(3.0, 1.0, 2.0, 0.5, 4.0, 6.0, math.pi / 2.0)
+    check("north-facing box turns with the rover",
+          close(north[0][0], 4.5) and close(north[0][1], 5.0) and
+          close(north[2][0], 2.0) and close(north[2][1], 9.0), north)
+
+    # The plan covers exactly that box: 4 m of pass across 2.5 m of ground.
+    strips = plan.plan_strips(polygon, 0.5, 0.1)
+    check("offset box plans one pass per row", len(strips) == 6, len(strips))
+    check("offset box pass length", all(close(strip["length_m"], 4.0) for strip in strips),
+          [strip["length_m"] for strip in strips])
+    check("offset box total distance", close(plan.total_planned_length(
+        [plan.strip_segment(strip, i) for i, strip in enumerate(strips)]), 24.0))
+
+    # Every point of the requested box must be within half a swath of a pass.
+    segments = [plan.strip_segment(strip, i) for i, strip in enumerate(strips)]
+    worst = 0.0
+    y = 0.0
+    while y <= 2.5:
+        x = 0.0
+        while x <= 4.0:
+            worst = max(worst, min(_distance_to_segment(x, y, s) for s in segments))
+            x += 0.25
+        y += 0.25
+    check("the whole offset box is wetted", worst <= 0.25 + 1e-6, worst)
+
+    for bad in ((-1.0, 1.0, 2.0, 2.0), (0.2, 0.2, 2.0, 2.0), (3.0, 1.0, 0.1, 0.1)):
+        try:
+            plan.offsets_polygon(*bad)
+            check(f"offsets {bad} rejected", False)
+        except ValueError:
+            check(f"offsets {bad} rejected", True)
+
+
 def test_track_errors():
     print("track errors")
     segment = {"index": 0, "x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 0.0, "length_m": 10.0}
@@ -332,6 +399,7 @@ def main():
     test_rectangle_plan()
     test_concave_polygon()
     test_mapped_polygon()
+    test_offset_area()
     test_normalize_and_world_transform()
     test_track_errors()
     test_steering()
