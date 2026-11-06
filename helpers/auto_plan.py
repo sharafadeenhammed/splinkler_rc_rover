@@ -6,12 +6,14 @@ of auto_controller.py means it can be exercised on a dev box
 
 Frames
 ──────
-Area frame   metres, x runs along a strip, y across the strips.  The planner
-             always normalises the polygon so its minimum corner is (0, 0);
-             auto_controller rotates and translates the result into the
-             rover's world frame when the mission starts, which is why the
-             polygon's absolute placement on the map is not used.
-World frame  metres, x east, y north — the frame PoseTracker reports.
+World frame  metres, x east, y north — the frame PoseTracker reports and the
+             frame the dashboard draws the work area in (it converts the
+             user's map taps with geo_to_local).
+Area frame   metres, x runs along a strip, y across the strips.  The sweep
+             planner always normalises the polygon so its minimum corner is
+             (0, 0) and auto_controller maps the result back: plan_polygon()
+             does that for a polygon drawn on the map, to_world() for the
+             legacy rover-relative rectangle.
 Angles       radians, counter-clockwise from +x, wrapped to [-pi, pi).
 
 Sign convention for guidance
@@ -136,6 +138,87 @@ def plan_strips(polygon, swath_m=DEFAULT_SWATH_M, overlap=DEFAULT_OVERLAP,
                 "forward": forward,
             })
     return strips
+
+
+def longest_edge_angle(polygon):
+    """Direction of the polygon's longest edge, folded into (-pi/2, pi/2].
+
+    Passes are planned parallel to this direction, so a field drawn at an
+    angle is worked along its length instead of across the map axes.
+    """
+    best_length = 0.0
+    best_angle = 0.0
+    count = len(polygon)
+    for index in range(count):
+        first = polygon[index]
+        second = polygon[(index + 1) % count]
+        dx = second[0] - first[0]
+        dy = second[1] - first[1]
+        length = math.hypot(dx, dy)
+        if length > best_length:
+            best_length = length
+            best_angle = math.atan2(dy, dx)
+    while best_angle > math.pi / 2.0:
+        best_angle -= math.pi
+    while best_angle <= -math.pi / 2.0:
+        best_angle += math.pi
+    return best_angle
+
+
+def rotate_point(x, y, angle):
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    return x * cos_a - y * sin_a, x * sin_a + y * cos_a
+
+
+def rotate_segment(segment, angle):
+    """Rotate a segment about the origin; its offset from the origin is kept."""
+    x0, y0 = rotate_point(segment["x0"], segment["y0"], angle)
+    x1, y1 = rotate_point(segment["x1"], segment["y1"], angle)
+    return {
+        "index": segment.get("index", 0),
+        "x0": x0, "y0": y0,
+        "x1": x1, "y1": y1,
+        "length_m": math.hypot(x1 - x0, y1 - y0),
+    }
+
+
+def flip_segment(segment):
+    return {
+        "index": segment.get("index", 0),
+        "x0": segment["x1"], "y0": segment["y1"],
+        "x1": segment["x0"], "y1": segment["y0"],
+        "length_m": segment_length(segment),
+    }
+
+
+def reverse_plan(segments):
+    """Work the same strips from the other end (last strip first)."""
+    return [flip_segment(segment) for segment in reversed(list(segments))]
+
+
+def plan_polygon(polygon, swath_m=DEFAULT_SWATH_M, overlap=DEFAULT_OVERLAP,
+                 min_span_m=MIN_SPAN_M):
+    """Plan a polygon drawn in world coordinates, in those same coordinates.
+
+    The polygon keeps its place on the map: the returned segments start and end
+    where the drawn area is, so the rover has to travel to it rather than
+    assuming it is parked on the near corner.
+    """
+    angle = longest_edge_angle(polygon)
+    local = [list(rotate_point(float(x), float(y), -angle)) for x, y in polygon]
+    min_x = min(point[0] for point in local)
+    min_y = min(point[1] for point in local)
+
+    segments = []
+    for index, strip in enumerate(plan_strips(local, swath_m, overlap, min_span_m)):
+        segment = strip_segment(strip, index)
+        segment["x0"] += min_x
+        segment["x1"] += min_x
+        segment["y0"] += min_y
+        segment["y1"] += min_y
+        segments.append(rotate_segment(segment, angle))
+    return segments
 
 
 def strip_segment(strip, index=0):
@@ -266,6 +349,12 @@ __all__ = [
     "strip_spacing",
     "plan_rows",
     "plan_strips",
+    "plan_polygon",
+    "longest_edge_angle",
+    "rotate_point",
+    "rotate_segment",
+    "flip_segment",
+    "reverse_plan",
     "strip_segment",
     "to_world",
     "segment_heading",

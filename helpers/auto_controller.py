@@ -31,9 +31,10 @@ from helpers.auto_plan import (
     DEFAULT_OVERLAP,
     DEFAULT_SWATH_M,
     MIN_DUTY,
-    normalize_polygon,
     plan_connector,
+    plan_polygon,
     plan_strips,
+    reverse_plan,
     rectangle_polygon,
     segment_heading,
     segment_length,
@@ -65,6 +66,9 @@ ROVER_LENGTH_M = 0.70
 AREA_WIDTH_M = 10.0
 AREA_HEIGHT_M = 10.0
 AREA_POLYGON = []
+# True when AREA_POLYGON holds map coordinates (drawn on the dashboard map) and
+# must be driven where it is; False for the legacy rover-relative rectangle.
+AREA_IS_MAPPED = False
 
 # The wetted band of one pass, not the chassis width: overridable per install.
 SWATH_M = DEFAULT_SWATH_M
@@ -100,6 +104,8 @@ OBSTACLE_DETOUR_M = ROVER_LENGTH_M * 0.9
 MAX_EVASIONS_PER_STRIP = 6
 
 MAX_MISSION_S = 1800.0
+# How close to the first strip the rover must already be to skip the drive over.
+TRANSIT_REACH_M = 0.60
 
 # ------------------------------------------------------------------ state ----
 auto_mode_active = False
@@ -172,7 +178,8 @@ def set_auto_speed(speed):
 
 
 def set_area(width_m, height_m=None):
-    global AREA_WIDTH_M, AREA_HEIGHT_M, AREA_POLYGON
+    """Legacy rectangle, measured from the rover's own start pose and heading."""
+    global AREA_WIDTH_M, AREA_HEIGHT_M, AREA_POLYGON, AREA_IS_MAPPED
     try:
         width = float(width_m)
         height = float(height_m) if height_m is not None else AREA_HEIGHT_M
@@ -185,12 +192,18 @@ def set_area(width_m, height_m=None):
     AREA_WIDTH_M = width
     AREA_HEIGHT_M = height
     AREA_POLYGON = rectangle_polygon(width, height)
-    print(f"📐 Area set to {width:.1f} x {height:.1f} m")
+    AREA_IS_MAPPED = False
+    print(f"📐 Area set to {width:.1f} x {height:.1f} m from the rover's start")
     return True
 
 
 def set_area_polygon(points):
-    global AREA_POLYGON, AREA_WIDTH_M, AREA_HEIGHT_M
+    """Work area drawn on the map, in map metres (the dashboard's frame).
+
+    The coordinates are kept exactly as given: the mission drives that polygon
+    where it was drawn, not a copy anchored to the rover.
+    """
+    global AREA_POLYGON, AREA_WIDTH_M, AREA_HEIGHT_M, AREA_IS_MAPPED
     try:
         polygon = [[float(point[0]), float(point[1])] for point in points]
     except (TypeError, ValueError, IndexError):
@@ -199,12 +212,15 @@ def set_area_polygon(points):
     if len(polygon) < 3:
         print("⚠️ Area polygon needs at least three points")
         return False
-    polygon = normalize_polygon(polygon)
     AREA_POLYGON = polygon
-    AREA_WIDTH_M = max(point[0] for point in polygon)
-    AREA_HEIGHT_M = max(point[1] for point in polygon)
-    print(f"📐 Area polygon set ({len(polygon)} points, "
-          f"{AREA_WIDTH_M:.1f} x {AREA_HEIGHT_M:.1f} m)")
+    AREA_WIDTH_M = max(point[0] for point in polygon) - min(point[0] for point in polygon)
+    AREA_HEIGHT_M = max(point[1] for point in polygon) - min(point[1] for point in polygon)
+    AREA_IS_MAPPED = True
+    centre_x = sum(point[0] for point in polygon) / len(polygon)
+    centre_y = sum(point[1] for point in polygon) / len(polygon)
+    print(f"📐 Area polygon set: {len(polygon)} points, "
+          f"{AREA_WIDTH_M:.1f} x {AREA_HEIGHT_M:.1f} m, "
+          f"centre ({centre_x:.1f}, {centre_y:.1f}) m")
     return True
 
 
@@ -752,35 +768,62 @@ def _soil_step(run, segment):
 
 
 # ----------------------------------------------------------------- mission ---
+def _orient_plan(pose, plan):
+    """Work the plan from whichever end is nearest to the rover."""
+    if len(plan) < 2:
+        return plan
+    first = plan[0]
+    last = plan[-1]
+    to_first = math.hypot(first["x0"] - pose["x_m"], first["y0"] - pose["y_m"])
+    to_last = math.hypot(last["x1"] - pose["x_m"], last["y1"] - pose["y_m"])
+    return plan if to_first <= to_last else reverse_plan(plan)
+
+
 def _build_plan(run):
-    polygon = AREA_POLYGON or rectangle_polygon(AREA_WIDTH_M, AREA_HEIGHT_M)
-    strips = plan_strips(polygon, SWATH_M, SWATH_OVERLAP)
-    if not strips:
+    """Strips in map coordinates.
+
+    A dashboard work area is a polygon on the map, so it is driven exactly
+    where it was drawn.  The legacy rectangle (set_area, or no area at all) is
+    measured from the rover's own start pose and heading instead.
+    """
+    pose = _pose(run)
+
+    if AREA_POLYGON and AREA_IS_MAPPED:
+        plan = plan_polygon(AREA_POLYGON, SWATH_M, SWATH_OVERLAP)
+        source = "map polygon"
+    else:
+        polygon = AREA_POLYGON or rectangle_polygon(AREA_WIDTH_M, AREA_HEIGHT_M)
+        origin_x, origin_y = pose["x_m"], pose["y_m"]
+        heading = math.radians(pose["heading_deg"])
+        plan = [
+            to_world(strip_segment(strip, index), origin_x, origin_y, heading)
+            for index, strip in enumerate(plan_strips(polygon, SWATH_M, SWATH_OVERLAP))
+        ]
+        source = "rover-relative rectangle"
+
+    if not plan:
         raise RuntimeError("the work area produced no strips")
 
-    pose = _pose(run)
-    origin_x, origin_y = pose["x_m"], pose["y_m"]
-    heading = math.radians(pose["heading_deg"])
-    world = []
-    for index, strip in enumerate(strips):
-        world.append(to_world(strip_segment(strip, index), origin_x, origin_y, heading))
-
-    run.strips = world
-    run.total = len(world)
-    run.total_m = total_planned_length(world)
+    plan = _orient_plan(pose, plan)
+    run.strips = plan
+    run.total = len(plan)
+    run.total_m = total_planned_length(plan)
+    start = plan[0]
     print(f"🗺️  Plan: {run.total} strips, {run.total_m:.1f} m, "
-          f"swath {SWATH_M:.2f} m from ({origin_x:.2f}, {origin_y:.2f}) "
-          f"heading {pose['heading_deg']:.0f}°")
-    return world
+          f"swath {SWATH_M:.2f} m ({source}), first strip starts at "
+          f"({start['x0']:.1f}, {start['y0']:.1f}) heading "
+          f"{math.degrees(segment_heading(start)):.0f}°")
+    return plan
 
 
-def _run_strip(run, segment):
-    """Drive one strip to the end, recovering from soil checks and obstacles."""
+def _run_segment(run, segment, check_soil=True, count_coverage=True):
+    """Drive one segment to the end, recovering from soil checks and obstacles."""
     while not run.aborted():
-        driven, reason = _follow_segment(run, segment)
+        driven, reason = _follow_segment(run, segment, allow_soil_check=check_soil)
         if reason == "done":
-            run.completed += 1
-            run.covered_m += segment_length(segment)
+            if count_coverage:
+                run.completed += 1
+                run.covered_m += segment_length(segment)
             run.stalls = 0
             _publish(run, phase="driving")
             return True
@@ -792,17 +835,19 @@ def _run_strip(run, segment):
         if reason == "obstacle":
             _publish(run, phase="obstacle")
             if run.evasions_this_strip >= MAX_EVASIONS_PER_STRIP:
-                print(f"⚠️ Strip {run.index + 1} blocked after "
-                      f"{run.evasions_this_strip} evasions; leaving it incomplete")
-                run.incomplete.append(run.index + 1)
-                run.covered_m += driven
-                _publish(run, phase="driving")
+                if count_coverage:
+                    print(f"⚠️ Strip {run.index + 1} blocked after "
+                          f"{run.evasions_this_strip} evasions; leaving it incomplete")
+                    run.incomplete.append(run.index + 1)
+                    run.covered_m += driven
+                    _publish(run, phase="driving")
                 return False
             if not _avoid_obstacle(run, segment):
                 if run.aborted():
                     return False
-                run.incomplete.append(run.index + 1)
-                run.covered_m += driven
+                if count_coverage:
+                    run.incomplete.append(run.index + 1)
+                    run.covered_m += driven
                 return False
             continue
         if reason == "stalled":
@@ -816,13 +861,44 @@ def _run_strip(run, segment):
     return False
 
 
+def _run_strip(run, segment):
+    return _run_segment(run, segment)
+
+
+def _transit_to(run, segment):
+    """Drive over to the work area: no soil probing and no coverage credit."""
+    _publish(run, phase="transit")
+    if not _turn_to_heading(run, segment_heading(segment)):
+        return False
+    return _run_segment(run, segment, check_soil=False, count_coverage=False)
+
+
 def _mission(run):
     _publish(run, phase="planning")
     _freeze_gps_heading(run)
 
     plan = _build_plan(run)
-    _publish(run, phase="driving")
     run.stalls = 0
+
+    first = plan[0]
+    pose = _pose(run)
+    start_gap = math.hypot(first["x0"] - pose["x_m"], first["y0"] - pose["y_m"])
+    if start_gap > TRANSIT_REACH_M:
+        print(f"🚗 Driving {start_gap:.1f} m to the first strip")
+        transit = {
+            "index": 0,
+            "x0": pose["x_m"], "y0": pose["y_m"],
+            "x1": first["x0"], "y1": first["y0"],
+            "length_m": start_gap,
+        }
+        if not _transit_to(run, transit):
+            if not run.aborted():
+                run.fault = "could not reach the work area"
+            return
+        if not _turn_to_heading(run, segment_heading(first)):
+            run.fault = "could not line up with the first strip"
+            return
+    _publish(run, phase="driving")
 
     for index, segment in enumerate(plan):
         if run.aborted():

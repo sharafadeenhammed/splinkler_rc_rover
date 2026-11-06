@@ -131,6 +131,75 @@ def test_concave_polygon():
     check("every strip has real length", all(strip["length_m"] >= plan.MIN_SPAN_M for strip in strips))
 
 
+def _rotate(points, angle, dx=0.0, dy=0.0):
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    return [[x * cos_a - y * sin_a + dx, x * sin_a + y * cos_a + dy] for x, y in points]
+
+
+def test_mapped_polygon():
+    """A work area drawn on the map must be planned where it was drawn."""
+    print("mapped polygon")
+    rectangle = [[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]]
+    angle = math.radians(30.0)
+    polygon = _rotate(rectangle, angle, 5.0, -3.0)
+
+    check("sweep follows the longest edge",
+          close(abs(plan.longest_edge_angle(polygon)), angle, 1e-9),
+          math.degrees(plan.longest_edge_angle(polygon)))
+
+    strips = plan.plan_polygon(polygon, 0.50, 0.10)
+    check("strips planned", len(strips) == 5, len(strips))
+    check("passes run along the long edge",
+          all(close(abs(plan.segment_heading(seg) - angle) % math.pi,
+                    0.0, 1e-6) or close(abs(plan.segment_heading(seg) - angle) % math.pi,
+                                         math.pi, 1e-6) for seg in strips),
+          [round(math.degrees(plan.segment_heading(s)), 1) for s in strips])
+    check("strip length is the area length",
+          all(close(seg["length_m"], 4.0, 1e-6) for seg in strips),
+          [round(seg["length_m"], 2) for seg in strips])
+
+    inside_all = True
+    for seg in strips:
+        mid_x = (seg["x0"] + seg["x1"]) / 2.0
+        mid_y = (seg["y0"] + seg["y1"]) / 2.0
+        # probe just inside the area, the near/far edge lines sit on it
+        if not (point_in_polygon(mid_x, mid_y, polygon)
+                or point_in_polygon(mid_x, mid_y - 1e-3, polygon)
+                or point_in_polygon(mid_x, mid_y + 1e-3, polygon)):
+            inside_all = False
+            print(f"       strip midpoint off the area: ({mid_x:.2f}, {mid_y:.2f})")
+    check("strips stay on the drawn area", inside_all)
+
+    # The plan keeps the map placement instead of starting at the origin.
+    xs = [value for seg in strips for value in (seg["x0"], seg["x1"])]
+    ys = [value for seg in strips for value in (seg["y0"], seg["y1"])]
+    check("plan keeps the map position",
+          min(xs) > 2.0 and min(ys) < -1.0,
+          (round(min(xs), 2), round(min(ys), 2)))
+
+    check("total length adds up",
+          close(plan.total_planned_length(strips), 20.0, 1e-6),
+          plan.total_planned_length(strips))
+
+    # Reversed plan starts at the other corner and still links up.
+    reversed_plan = plan.reverse_plan(strips)
+    check("reverse keeps strip count", len(reversed_plan) == len(strips))
+    check("reverse starts at the old end",
+          close(reversed_plan[0]["x0"], strips[-1]["x1"], 1e-9) and
+          close(reversed_plan[0]["y0"], strips[-1]["y1"], 1e-9))
+    links = [plan.plan_connector(a, b) for a, b in zip(reversed_plan, reversed_plan[1:])]
+    check("reversed strips still connect",
+          all(link is not None and link["length_m"] < 0.7 for link in links),
+          [round(link["length_m"], 2) if link else None for link in links])
+
+    # Winding order must not matter.
+    clockwise = list(reversed(polygon))
+    cw_strips = plan.plan_polygon(clockwise, 0.50, 0.10)
+    check("clockwise polygon plans the same distance",
+          close(plan.total_planned_length(cw_strips), 20.0, 1e-6),
+          plan.total_planned_length(cw_strips))
+
+
 def test_normalize_and_world_transform():
     print("frames")
     polygon = [[5.0, 7.0], [9.0, 7.0], [9.0, 9.0], [5.0, 9.0]]
@@ -262,6 +331,7 @@ def test_degenerate_input():
 def main():
     test_rectangle_plan()
     test_concave_polygon()
+    test_mapped_polygon()
     test_normalize_and_world_transform()
     test_track_errors()
     test_steering()

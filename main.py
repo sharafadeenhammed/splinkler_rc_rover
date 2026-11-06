@@ -31,7 +31,7 @@ from helpers.mpu6050 import (
 from helpers.hmc5883l import (
     get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
-from helpers.pose_fusion import gps_heading_usable
+from helpers.pose_fusion import gps_heading_usable, geo_to_local
 from helpers import motor_controls
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
@@ -88,11 +88,41 @@ saved_map_origin = DB.map_origin()
 _map_origin_cache = {"value": saved_map_origin}
 if saved_map_origin:
     pose_tracker.set_map_origin(saved_map_origin[0], saved_map_origin[1])
-if saved_area and len(saved_area.get("polygon", [])) >= 3:
+
+
+def _apply_saved_area(area, origin):
+    """Load a saved work area into the mission's current frame.
+
+    A work area is drawn in lat/lon and stored twice: geographic points for
+    the map, local metres for the mission.  Local metres are only valid for
+    the map origin they were drawn against, so when the rover's map start has
+    moved since, the polygon is re-derived from its geographic points.
+    """
+    if not area:
+        return False
+    polygon = area.get("polygon") or []
+    map_polygon = area.get("map_polygon") or []
+    area_origin = (area.get("origin_lat"), area.get("origin_lon"))
+    moved = (
+        origin and len(map_polygon) == len(polygon) and len(map_polygon) >= 3
+        and area_origin[0] is not None and area_origin[1] is not None
+        and (abs(origin[0] - area_origin[0]) > 1e-9
+             or abs(origin[1] - area_origin[1]) > 1e-9)
+    )
+    if moved:
+        polygon = [
+            list(geo_to_local(float(point[0]), float(point[1]), origin[0], origin[1]))
+            for point in map_polygon
+        ]
+    if len(polygon) < 3:
+        return False
     try:
-        set_area_polygon(saved_area["polygon"])
+        return set_area_polygon(polygon)
     except (TypeError, ValueError):
-        pass
+        return False
+
+
+_apply_saved_area(saved_area, saved_map_origin)
 
 # Cache for the active work area so telemetry doesn't re-read the store every build.
 _area_cache = {"value": None, "ts": 0.0}
@@ -322,6 +352,8 @@ def apply_navigation_origin(latitude, longitude, source="manual"):
     pose_tracker.reset(0.0, 0.0, heading_rad)
     set_imu_heading_rad(heading_rad)
     reset_compass_fusion()
+    # The active work area is fixed on the map, not in the old frame.
+    _apply_saved_area(DB.active_area(), _map_origin_cache["value"])
     return {
         "map_origin": [latitude, longitude],
         "source": source,
