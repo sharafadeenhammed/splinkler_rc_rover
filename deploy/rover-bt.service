@@ -1,0 +1,20 @@
+#sudo tee /etc/systemd/system/rover-bt.service > /dev/null << 'EOF'
+[Unit]
+Description=Smart-Rover Bluetooth provisioning (BLE GATT)
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/rover_dev/project
+#ExecStartPre=/usr/sbin/rfkill unblock bluetooth
+ExecStartPre=/bin/sleep 5
+ExecStart=/home/rover_dev/project/.venv/bin/python /home/rover_dev/project/bt.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF

@@ -44,7 +44,7 @@ sudo apt-get update
 # i2c-tools   : i2cdetect, for checking the MPU6050 / compass wiring
 # rpicam-apps : rpicam-vid, which MediaMTX's rpiCamera source feeds from
 sudo apt-get install -y --no-install-recommends \
-  pigpio bluez python3-venv python3-pip i2c-tools rpicam-apps
+  pigpio bluez #python3-venv python3-pip i2c-tools rpicam-apps
 
 # pigpiod must be up before the app starts: it owns the PWM timing for the
 # L298N enables and the servo pulses, and it is what keeps driving the motors
@@ -105,9 +105,20 @@ if [ "$INSTALL_SERVICES" -eq 1 ]; then
   echo "==> systemd units"
   sudo install -m 0644 "$PROJECT_DIR/deploy/rover.service" "$SERVICE_DIR/rover.service"
   sudo systemctl daemon-reload
-  sudo systemctl enable rover.service
+  # sudo systemctl enable rover.service
   # Start it now unless it is already up, so a re-run just picks up new code.
-  sudo systemctl restart rover.service
+  # sudo systemctl restart rover.service
+  sleep 2
+  systemctl --no-pager --lines=3 status rover.service || true
+fi
+
+if [ "$INSTALL_SERVICES" -eq 1 ]; then
+  echo "==> systemd units"
+  sudo install -m 0644 "$PROJECT_DIR/deploy/rover-bt.service" "$SERVICE_DIR/rover.service"
+  sudo systemctl daemon-reload
+  # sudo systemctl enable rover.service
+  # Start it now unless it is already up, so a re-run just picks up new code.
+  # sudo systemctl restart rover.service
   sleep 2
   systemctl --no-pager --lines=3 status rover.service || true
 fi
