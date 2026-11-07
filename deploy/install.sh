@@ -1,8 +1,13 @@
-#!/usr/bin/env bash
-# One-shot provisioning for the rover dashboard (Raspberry Pi OS Bookworm).
+# #!/usr/bin/env bash
+# One-shot provisioning for the rover dashboard (Raspberry Pi OS Bookworm / Trixie).
 #
-#   bash deploy/install.sh                 # packages, venv, systemd units
-#   bash deploy/install.sh --no-services   # skip the systemd units
+#   bash deploy/install.sh                  # packages, venv, systemd units
+#   bash deploy/install.sh --no-services    # skip the systemd units
+#   WIFI_COUNTRY=NG bash deploy/install.sh  # also set the Wi-Fi country
+#                                           # (a missing country leaves the radios soft-blocked)
+#
+# Run it as your normal user (rover_dev), NOT with sudo.  The script calls sudo
+# itself where needed, so .venv and the project files stay user-owned.
 #
 # Safe to re-run: apt and pip are idempotent, the units are re-installed and
 # re-enabled.  Reboot once after the first run if the boot-config check below
@@ -19,9 +24,13 @@ case "${1:-}" in
   *) echo "usage: bash deploy/install.sh [--no-services]" >&2; exit 2 ;;
 esac
 
-# The units run as rover_dev, so install as the invoking user (sudo keeps the
-# environment) rather than as root: .venv and the files stay user-owned.
-APP_USER="${SUDO_USER:-$(id -un)}"
+# Running under sudo would create .venv as root even though the units run as
+# rover_dev, so refuse and let the script call sudo only where it must.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "install.sh: run as your normal user (not root / sudo)." >&2
+  exit 1
+fi
+APP_USER="$(id -un)"
 
 if ! command -v apt-get >/dev/null 2>&1; then
   echo "install.sh: this targets Raspberry Pi OS / Debian (apt-get not found)" >&2
@@ -35,34 +44,51 @@ if [ "$APP_USER" != "rover_dev" ]; then
   echo "          rover_dev; edit User= in both units to match '$APP_USER'."
 fi
 
+# A fresh OS with no Wi-Fi country leaves Wi-Fi/Bluetooth soft-blocked.
+if [ -n "${WIFI_COUNTRY:-}" ] && command -v raspi-config >/dev/null 2>&1; then
+  echo "==> Wi-Fi country: $WIFI_COUNTRY"
+  sudo raspi-config nonint do_wifi_country "$WIFI_COUNTRY" || echo "    could not set the Wi-Fi country"
+fi
+
 echo "==> system packages"
 sudo apt-get update
-# pigpio      : pigpiod daemon + the Python bindings gpiozero binds to
-#               (motors, servos, encoders and the ultrasonic sensor all need
-#               the daemon running -- see the systemctl line below)
+# git         : the dashboard's "Update rover code" runs git pull
 # python3-venv: creates .venv
 # i2c-tools   : i2cdetect, for checking the MPU6050 / compass wiring
 # rpicam-apps : rpicam-vid, which MediaMTX's rpiCamera source feeds from
 sudo apt-get install -y --no-install-recommends \
-  pigpio bluez #python3-venv python3-pip i2c-tools rpicam-apps
+  git bluez rfkill python3-venv python3-pip i2c-tools rpicam-apps
+
+# pigpio is installed on its own: some OS releases don't ship it, and with
+# set -e a missing package in the list above would abort the whole script.
+echo "==> pigpio"
+if ! sudo apt-get install -y --no-install-recommends pigpio; then
+  echo "    WARNING: apt could not install 'pigpio' on this OS release."
+  echo "             Build it from source and add a pigpiod.service, then re-run."
+fi
 
 # pigpiod must be up before the app starts: it owns the PWM timing for the
 # L298N enables and the servo pulses, and it is what keeps driving the motors
 # if the app is killed (deploy/emergency_stop.py talks to it directly).
-echo "==> pigpiod"
-sudo systemctl enable --now pigpiod.service
-if ! systemctl is-active --quiet pigpiod.service; then
-  echo "install.sh: pigpiod failed to start (journalctl -u pigpiod)" >&2
-  exit 1
+if systemctl cat pigpiod.service >/dev/null 2>&1; then
+  sudo systemctl enable --now pigpiod.service
+  if ! systemctl is-active --quiet pigpiod.service; then
+    echo "install.sh: pigpiod failed to start (journalctl -u pigpiod)" >&2
+    exit 1
+  fi
+else
+  echo "    pigpiod.service not found: motors, servos and encoders will not work until it is installed."
 fi
 
 # bluez is what bt.py talks to over D-Bus (BLE provisioning: Wi-Fi setup,
-# START/STOP/UPDATE of rover.service, IP and update-status reads).  It has no
-# radio switch of its own; bt.py is a separate script, not part of the app.
+# START/STOP/UPDATE of rover.service, IP and update-status reads).
 echo "==> bluetooth"
 sudo systemctl enable --now bluetooth.service || echo "    bluetooth.service could not be started"
-if command -v rfkill >/dev/null 2>&1 && rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: yes'; then
-  sudo rfkill unblock bluetooth && echo "    unblocked the Bluetooth radio"
+if command -v rfkill >/dev/null 2>&1; then
+  RFKILL_BT="$(rfkill list bluetooth 2>/dev/null || true)"
+  if grep -q 'Soft blocked: yes' <<<"$RFKILL_BT"; then
+    sudo rfkill unblock bluetooth && echo "    unblocked the Bluetooth radio"
+  fi
 fi
 
 # /dev/serial0 (GPS), /dev/video* (camera), i2c-dev and the BlueZ D-Bus API
@@ -70,6 +96,7 @@ fi
 # the daemon.
 echo "==> groups for $APP_USER"
 for grp in dialout video i2c gpio bluetooth; do
+  getent group "$grp" >/dev/null || { echo "    (group $grp does not exist, skipped)"; continue; }
   if ! id -nG "$APP_USER" | tr ' ' '\n' | grep -qx "$grp"; then
     sudo usermod -aG "$grp" "$APP_USER" && echo "    added $grp"
   fi
@@ -103,24 +130,22 @@ echo "==> python packages"
 
 if [ "$INSTALL_SERVICES" -eq 1 ]; then
   echo "==> systemd units"
-  sudo install -m 0644 "$PROJECT_DIR/deploy/rover.service" "$SERVICE_DIR/rover.service"
+  sudo install -m 0644 "$PROJECT_DIR/deploy/rover.service"    "$SERVICE_DIR/rover.service"
+  sudo install -m 0644 "$PROJECT_DIR/deploy/rover-bt.service" "$SERVICE_DIR/rover-bt.service"
   sudo systemctl daemon-reload
-  # sudo systemctl enable rover.service
-  # Start it now unless it is already up, so a re-run just picks up new code.
-  # sudo systemctl restart rover.service
-  sleep 2
-  systemctl --no-pager --lines=3 status rover.service || true
-fi
 
-if [ "$INSTALL_SERVICES" -eq 1 ]; then
-  echo "==> systemd units"
-  sudo install -m 0644 "$PROJECT_DIR/deploy/rover-bt.service" "$SERVICE_DIR/rover.service"
-  sudo systemctl daemon-reload
+  # Catches mistakes such as two ExecStart= lines before they bite at runtime.
+  sudo systemd-analyze verify "$SERVICE_DIR/rover.service" "$SERVICE_DIR/rover-bt.service" \
+    || echo "    WARNING: systemd-analyze reported problems with a unit (see above)"
+
+  # rover-bt.service must run at every boot: it is how you reach the Pi over
+  # BLE when Wi-Fi is down.  rover.service is started from the dashboard
+  # (START/STOP), so it is not enabled here; uncomment to start it at boot.
   # sudo systemctl enable rover.service
-  # Start it now unless it is already up, so a re-run just picks up new code.
-  # sudo systemctl restart rover.service
-  sleep 2
-  systemctl --no-pager --lines=3 status rover.service || true
+  sudo systemctl enable rover-bt.service
+  sudo systemctl restart rover-bt.service   # pick up new bt.py on re-runs
+  sleep 3
+  systemctl --no-pager --lines=3 status rover-bt.service || true
 fi
 
 if [ ! -x "$PROJECT_DIR/bin/mediamtx" ]; then
@@ -148,7 +173,7 @@ cat <<EOF
 Done.
 
   dashboard : http://$(hostname -I | awk '{print $1}'):5000
-  logs      : journalctl -u rover -f
+  logs      : journalctl -u rover -f      (BLE: journalctl -u rover-bt -f)
   camera    : bash deploy/setup_webrtc.sh   (WebRTC via MediaMTX)
   reboot    : required after I2C / DHT11 boot-config changes
 EOF
