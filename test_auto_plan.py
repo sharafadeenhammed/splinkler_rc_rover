@@ -343,7 +343,11 @@ def test_steering():
 
     left, right, *_ = plan.steer_duties(
         segment, {"x_m": 2.0, "y_m": 0.0, "heading_deg": 0.0}, 0.7)
-    check("on the line both wheels equal", close(left, 0.7) and close(right, 0.7), (left, right))
+    # No correction on the line, so both wheels sit at the requested duty — but
+    # never below MIN_DUTY, which is the floor that gets the motors turning.
+    expected = max(0.7, plan.MIN_DUTY)
+    check("on the line both wheels equal",
+          close(left, expected) and close(right, expected), (left, right))
 
 
 def test_connectors_and_trims():

@@ -11,6 +11,12 @@ PULSES_PER_MOTOR_REV = 11
 GEAR_RATIO = 30   # set from the gearbox label, or calibrate with a 1 m test
 COUNTS_PER_OUTPUT_REV = PULSES_PER_MOTOR_REV * GEAR_RATIO
 
+# Ticks over one *wheel* revolution — what the odometry needs (we count A's
+# rising edges only, so this equals the counts per output-shaft revolution).
+# Override the number below from calibrate_wheels.py if the gearbox label is
+# wrong: lift the rover, mark the tyre, turn it exactly once.
+TICKS_PER_WHEEL_REV = COUNTS_PER_OUTPUT_REV
+
 
 class HardwareEncoder:
     """Counts rising edges of A; direction from B's last known level."""
@@ -100,5 +106,6 @@ def encoder_config():
         "pulses_per_motor_rev": PULSES_PER_MOTOR_REV,
         "gear_ratio": GEAR_RATIO,
         "counts_per_output_rev": COUNTS_PER_OUTPUT_REV,
+        "ticks_per_wheel_rev": TICKS_PER_WHEEL_REV,
         "counting_mode": "channel_a_rising_edge",
     }

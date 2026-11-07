@@ -93,7 +93,7 @@ def measure_one_revolution(side, speed):
         print("No encoder ticks received; check the signal wiring.")
         return
     print(f"  Measured: {ticks} counts/output-shaft revolution ({elapsed:.1f}s)")
-    print("  Set TICKS_PER_WHEEL_REV to this value in helpers/auto_controller.py")
+    print("  Set TICKS_PER_WHEEL_REV to this value in helpers/encoder_controller.py")
 
 
 def main():
