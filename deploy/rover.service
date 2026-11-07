@@ -1,9 +1,10 @@
 [Unit]
 Description=Sprinkler Rover dashboard (Rover OS)
 After=network-online.target pigpiod.service
-Wants=network-online.target
+Wants=network-online.target pigpiod.service
 # pigpiod must be running: motors, encoders and the ultrasonic sensor all
-# talk to the pigpio daemon.
+# talk to the pigpio daemon.  Wants= pulls it in at boot (After= only orders),
+# so enabling rover.service is enough even on a fresh image.
 
 [Service]
 Type=simple

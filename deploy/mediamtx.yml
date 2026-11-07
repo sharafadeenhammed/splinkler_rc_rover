@@ -10,7 +10,7 @@
 # Installed and started by deploy/setup_webrtc.sh (systemd unit:
 # deploy/mediamtx.service).  Reference: mediamtx.org/docs
 
-logLevel: info
+logLevel: warn #info
 logDestinations: [stdout]
 logStructured: false
 
@@ -27,7 +27,7 @@ moq: false
 
 # RTSP stays on, but loopback-only: ffplay/VLC on the Pi is the fastest way to
 # prove the encoder works without involving a browser.
-rtsp: true
+rtsp: false #true
 rtspAddress: 127.0.0.1:8554
 rtspTransports: [tcp]
 
@@ -47,20 +47,20 @@ pathDefaults:
   # last one leaves — on the Zero W the encoder must not run while nobody
   # watches.
   sourceOnDemand: true
-  sourceOnDemandStartTimeout: 10s
-  sourceOnDemandCloseAfter: 10s
+  sourceOnDemandStartTimeout: 15s
+  sourceOnDemandCloseAfter: 15s
 
 paths:
   # Dashboard reads http://<pi>:8889/rover/whep (see static/index.js).
   rover:
     source: rpiCamera
-    rpiCameraWidth: 640
-    rpiCameraHeight: 480
-    rpiCameraFPS: 15
+    rpiCameraWidth: 320
+    rpiCameraHeight: 240
+    rpiCameraFPS: 8
     # Hardware encoder: a fraction of the CPU the old M-JPEG path used.
     rpiCameraCodec: hardwareH264
-    rpiCameraBitrate: 1000000
+    rpiCameraBitrate: 400000 #1000000 #700000
     # Keyframe every second (15 frames) so a viewer that joins mid-stream has
     # a picture almost immediately.
-    rpiCameraIDRPeriod: 15
+    rpiCameraIDRPeriod: 8 #15
     rpiCameraDenoise: cdn_off
