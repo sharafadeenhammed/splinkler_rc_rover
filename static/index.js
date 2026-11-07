@@ -164,24 +164,80 @@ const WEBRTC_RETRY_MS = 5000;
 let peerConnection = null;
 let webrtcRetryTimer = null;
 let webrtcVideoTimer = null;
+// The feed is a deliberate choice, not a page-load side effect: switching it
+// off closes the WHEP session, and MediaMTX's sourceOnDemand then shuts the
+// Pi camera and hardware encoder down ~15 s later.
+let cameraFeedOn = true;
+// WHEP hands back a session URL in the Location header; DELETE ends the session
+// so MediaMTX stops the source now instead of noticing the reader is gone.
+let whepSessionUrl = null;
+
+function setCameraUi() {
+  const button = document.getElementById("cameraToggleBtn");
+  const tag = document.getElementById("cameraLiveTag");
+  const tagTxt = document.getElementById("cameraStateTxt");
+  const off = document.getElementById("cameraOff");
+  if (button) {
+    button.textContent = cameraFeedOn ? "Stop" : "Start";
+    button.setAttribute("aria-pressed", cameraFeedOn ? "true" : "false");
+  }
+  if (tag) tag.classList.toggle("off", !cameraFeedOn);
+  if (tagTxt) tagTxt.textContent = cameraFeedOn ? "LIVE" : "OFF";
+  if (off) off.hidden = cameraFeedOn;
+}
 
 function closeWebRTC() {
   clearTimeout(webrtcVideoTimer);
   clearTimeout(webrtcRetryTimer);
+  if (whepSessionUrl) {
+    const url = whepSessionUrl;
+    whepSessionUrl = null;
+    // Best effort: if DELETE is refused the closed peer connection still tears
+    // the session down, just less promptly.
+    fetch(url, { method: "DELETE" }).catch(() => {});
+  }
   if (peerConnection) {
     try { peerConnection.close(); } catch (_) {}
     peerConnection = null;
   }
-  if (videoStream) videoStream.srcObject = null;
+  if (videoStream) {
+    videoStream.srcObject = null;
+    if (videoStream.pause) videoStream.pause();
+  }
+}
+
+function startCameraFeed(reason) {
+  cameraFeedOn = true;
+  setCameraUi();
+  return connectWebRTC(reason || "user start");
+}
+
+function stopCameraFeed(reason) {
+  cameraFeedOn = false;
+  closeWebRTC();
+  setCameraUi();
+  console.log(`📹 Camera feed stopped${reason ? ` (${reason})` : ""}.`);
+}
+
+function toggleCameraFeed() {
+  if (cameraFeedOn) {
+    stopCameraFeed("user");
+    showToast("Camera feed stopped");
+  } else {
+    showToast("Opening camera feed…");
+    startCameraFeed("user start");
+  }
 }
 
 function retryWebRTC(reason) {
-  console.warn(`📹 WebRTC: ${reason}. Retrying in ${WEBRTC_RETRY_MS / 1000}s.`);
   closeWebRTC();
+  if (!cameraFeedOn) return;
+  console.warn(`📹 WebRTC: ${reason}. Retrying in ${WEBRTC_RETRY_MS / 1000}s.`);
   webrtcRetryTimer = setTimeout(() => connectWebRTC(reason), WEBRTC_RETRY_MS);
 }
 
 async function connectWebRTC(reason) {
+  if (!cameraFeedOn) return false;
   if (!videoStream || !window.RTCPeerConnection) {
     console.warn("📹 WebRTC is not supported by this browser.");
     return false;
@@ -192,7 +248,7 @@ async function connectWebRTC(reason) {
   connection.addTransceiver("video", { direction: "recvonly" });
 
   connection.ontrack = (event) => {
-    if (connection !== peerConnection) return;
+    if (connection !== peerConnection || !cameraFeedOn) return;
     clearTimeout(webrtcVideoTimer);
     videoStream.srcObject = event.streams[0];
     const play = videoStream.play();
@@ -215,6 +271,8 @@ async function connectWebRTC(reason) {
       body: offer.sdp,
     });
     if (!response.ok) throw new Error(`WHEP HTTP ${response.status}`);
+    const location = response.headers.get("Location");
+    whepSessionUrl = location ? new URL(location, WEBRTC_WHEP_URL).toString() : null;
     const answer = await response.text();
     if (connection !== peerConnection) return false;
     await connection.setRemoteDescription({ type: "answer", sdp: answer });
@@ -1140,8 +1198,12 @@ window.addEventListener("beforeunload", () => {
   }
 });
 
-// Camera boot: start the WebRTC session on page load.
+// Camera boot: open the feed on page load, as before; the Stop button hands
+// control to the user afterwards.
+setCameraUi();
 if (videoStream) connectWebRTC("page load");
+// Closing the tab should release the Pi camera too, not wait for a timeout.
+window.addEventListener("pagehide", closeWebRTC);
 
 // Initialize WebSocket on page load
 initWebSocket();

@@ -85,3 +85,11 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 .sensor-strip strong.alert{color:var(--danger);text-shadow:0 0 8px rgba(255,111,125,.35)}
 .o-stat strong.fused{color:var(--green);text-shadow:0 0 8px rgba(108,226,157,.4)}
 .video-frame video{width:100%;height:100%;object-fit:cover;display:block}
+
+/* Camera feed toggle: Start/Stop plus the "off" placeholder. */
+.live-tag.off{color:#8a96a6;background:rgba(255,255,255,.05)}
+.live-tag.off i{background:#6f7e91;box-shadow:none}
+.live-tag b{font-weight:500}
+.video-off{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;background:#080c12;color:#8a96a6;font:11px 'DM Mono',monospace;letter-spacing:.14em;text-transform:uppercase}
+.video-off[hidden]{display:none}
+.video-off small{color:#5d6a7a;font:9px Manrope,system-ui,sans-serif;letter-spacing:.06em}
