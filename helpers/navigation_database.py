@@ -17,6 +17,7 @@ from .pose_fusion import (
     GPS_HEADING_BETA,
     GPS_MAX_JUMP_M,
     angle_lerp,
+    course_to_heading_rad,
     geo_to_local,
     gps_fix_usable,
     gps_heading_usable,
@@ -233,7 +234,7 @@ class PoseTracker:
         self._fusion_note = "gps_encoders_imu"
 
         if self._gps_heading_enabled and gps_heading_usable(gps):
-            course_rad = math.radians(float(gps["course_deg"]))
+            course_rad = course_to_heading_rad(gps["course_deg"])
             self.heading_rad = angle_lerp(self.heading_rad, course_rad, GPS_HEADING_BETA)
             self._gps_heading_active = True
 

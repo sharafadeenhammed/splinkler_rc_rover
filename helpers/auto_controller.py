@@ -75,8 +75,14 @@ SWATH_M = DEFAULT_SWATH_M
 SWATH_OVERLAP = DEFAULT_OVERLAP
 
 # ---------------------------------------------------------------- driving ----
+# MIN_DUTY (auto_plan) is the hard floor: below it the gearmotors hum without
+# turning.  Never command a wheel under it, and never *sit* on it either — a
+# duty exactly at the floor leaves the wheels stalled on their own friction.
+# STEER_HEADROOM lifts the straight-line base duty off the floor so a wheel can
+# be sped up or slowed down inside the usable MIN_DUTY..1.0 band.
+STEER_HEADROOM = 0.10
 AUTO_DRIVE_SPEED = 0.70           # base duty while following a strip
-TURN_DUTY = 0.55
+TURN_DUTY = 0.90                  # pivots need more torque than rolling
 TURN_TOLERANCE_RAD = math.radians(2.5)
 TURN_SETTLE_S = 0.15
 LOOP_PERIOD_S = 0.02
@@ -173,7 +179,8 @@ def set_auto_speed(speed):
         print(f"⚠️ Invalid auto speed {speed!r}")
         return False
     AUTO_DRIVE_SPEED = max(0.2, min(1.0, value))
-    print(f"🚜 Auto speed set to {AUTO_DRIVE_SPEED:.2f}")
+    print(f"🚜 Auto speed set to {AUTO_DRIVE_SPEED:.2f} "
+          f"(strip duty {_straight_speed():.2f})")
     return True
 
 
@@ -517,7 +524,13 @@ def _drive_tank_safe(left, right):
 
 
 def _straight_speed():
-    return max(MIN_DUTY, min(1.0, AUTO_DRIVE_SPEED))
+    """Base duty for a strip: above the motors' floor, inside the usable band.
+
+    The floor is MIN_DUTY; stopping the base duty there would leave the wheels
+    on the edge of stalling with no downward steering authority left, which is
+    what made the first strip time out as a stall instead of being driven.
+    """
+    return max(MIN_DUTY + STEER_HEADROOM, min(1.0, AUTO_DRIVE_SPEED))
 
 
 def _follow_segment(run, segment, allow_soil_check=True):
@@ -618,7 +631,10 @@ def _turn_to_heading(run, target_rad, timeout_s=None):
                 stop()
                 time.sleep(TURN_SETTLE_S)
                 return True
-            duty = max(MIN_DUTY * 0.8, min(TURN_DUTY, abs(error) * 1.6))
+            # Constant pivot duty, not scaled by the error: scaling it down as
+            # the heading closes meant the last few degrees were driven at the
+            # hum floor, where the wheels stall instead of creeping round.
+            duty = TURN_DUTY
             if error > 0:
                 turnLeft(duty)
             else:
@@ -646,7 +662,9 @@ def _reverse_distance(run, metres, duty=0.45):
     left0, right0 = get_encoder_ticks()
     target_ticks = max(1.0, abs(metres) / METRES_PER_TICK)
     deadline = time.monotonic() + 2.0 + abs(metres) * 4.0
-    reverse(max(MIN_DUTY, min(0.6, duty)))
+    # Reversing drags the whole chassis: always give it duty with margin over
+    # the floor, never a value that only buzzes.
+    reverse(max(MIN_DUTY + STEER_HEADROOM, min(1.0, duty)))
     while not run.aborted() and time.monotonic() < deadline:
         left, right = get_encoder_ticks()
         moved = (abs(left - left0) + abs(right - right0)) * 0.5

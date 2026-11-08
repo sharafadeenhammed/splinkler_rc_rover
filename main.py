@@ -31,7 +31,7 @@ from helpers.mpu6050 import (
 from helpers.hmc5883l import (
     get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
-from helpers.pose_fusion import gps_heading_usable, geo_to_local, local_to_geo
+from helpers.pose_fusion import course_to_heading_rad, gps_heading_usable, geo_to_local, local_to_geo
 from helpers.auto_plan import offsets_world_polygon
 from helpers import motor_controls
 from helpers.gps_controller import get_gps
@@ -347,7 +347,8 @@ def apply_navigation_origin(latitude, longitude, source="manual"):
     heading_rad = 0.0
     snap = get_gps().get()
     if gps_heading_usable(snap):
-        heading_rad = math.radians(float(snap["course_deg"]))
+        # GPS course is a compass bearing; the pose frame is ENU maths angles.
+        heading_rad = course_to_heading_rad(snap["course_deg"])
     elif source == "gps" and snap.get("fix"):
         heading_rad = 0.0
     pose_tracker.reset(0.0, 0.0, heading_rad)
@@ -367,7 +368,10 @@ def handle_set_auto_speed(speed_pct):
     """Set autonomous cruise speed (0–100). Persists across auto mode restarts."""
     try:
         spd = max(10, min(100, int(float(speed_pct))))
-        set_auto_speed(spd)
+        # The dashboard speaks percent; the controller clamps a 0.2–1.0 duty.
+        # Passing the percent straight through made every setting above 1% the
+        # same full-duty request.
+        set_auto_speed(spd / 100.0)
         return {"success": True, "auto_speed_pct": spd}
     except (TypeError, ValueError) as e:
         return {"success": False, "error": str(e)}

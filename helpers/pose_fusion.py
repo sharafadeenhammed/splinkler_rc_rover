@@ -34,6 +34,17 @@ def normalize_angle_rad(angle):
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
+def course_to_heading_rad(course_deg):
+    """NMEA true course (0° = north, clockwise) → world heading (0° = east, CCW).
+
+    The pose, the planner and the dashboard's map all work in the local ENU
+    frame (x east, y north), where angles run counter-clockwise from +x.  A
+    GPS course is a compass bearing, so it has to be turned a quarter turn the
+    other way before it can be used as a heading.
+    """
+    return normalize_angle_rad(math.radians(90.0 - float(course_deg)))
+
+
 def angle_lerp(from_rad, to_rad, weight):
     weight = max(0.0, min(1.0, float(weight)))
     delta = normalize_angle_rad(to_rad - from_rad)
@@ -70,6 +81,7 @@ __all__ = [
     "local_to_geo",
     "normalize_angle_rad",
     "angle_lerp",
+    "course_to_heading_rad",
     "gps_fix_usable",
     "gps_heading_usable",
 ]
