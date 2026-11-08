@@ -1,26 +1,29 @@
-"""Autonomous coverage for the sprinkler rover.
+"""Autonomous area coverage for the sprinkler rover.
 
-The old controller drove the whole mission open-loop in wheel ticks, resetting
-the encoders at every phase.  PoseTracker (main.py) consumes *absolute* tick
-counts, so each reset teleported the reported pose backwards by more than a
-metre, which then made GPS fusion reject good fixes as spikes.  Turns were
-timed in ticks, the ultrasonic was polled ~50 times a second against an
-asynchronous value, and an aborted mission could leave a second thread driving.
+The mission is one explicit sweep of a work area the dashboard defines: a
+centre coordinate plus the two side lengths in metres.  That rectangle is
+planned into boustrophedon strips and each strip is driven by a small
+closed-loop follower:
 
-This version splits the job into three parts:
+    transit to the area -> for every strip: line up, drive, step across
 
-1. Planning  — helpers/auto_plan.py turns the area into ordered strips and
-   provides the guidance maths.  Pure, testable, no hardware.
-2. Following — one controller drives *any* straight segment using the fused
-   pose (x, y, heading): heading is closed on the gyro and cross-track error is
-   corrected continuously, so wheel slip, obstacle detours and uneven ground do
-   not accumulate into missed strips.
-3. Supervision — a small state machine owns the mission, the pump, the soil
-   probe and every failure path.  A run id makes sure only the newest mission
-   may command the motors.
+Design rules this rewrite follows, learned from field runs where the rover
+drove a short way and quietly stopped:
 
-Public API is unchanged apart from the additions set_pose_provider() and
-set_swath(); main.py only needs one extra call.
+* The mission never ends because one strip did not work.  A strip that times
+  out, stalls, or is blocked is recorded as incomplete and the mission moves
+  on, so the progress bar always advances and the reason for a skip is
+  visible in telemetry.
+* Only a genuinely unrecoverable error (mission time limit, an exception in
+  the engine, or the user pressing stop) sets a fault.
+* No fixed duration drives anything: every distance comes from the fused pose
+  (or the encoders as a fallback) and every turn is closed on the gyro.
+* Nothing is commanded below MIN_DUTY - under it the gearmotors hum without
+  turning - and the straight-line base duty sits above it so both wheels can
+  still be steered up or down.
+
+Planning lives in helpers/auto_plan.py and stays pure so it can be tested on
+a machine without the rover hardware (test_auto_plan.py).
 """
 
 import math
@@ -30,20 +33,15 @@ import time
 from helpers.auto_plan import (
     DEFAULT_OVERLAP,
     DEFAULT_SWATH_M,
+    MIN_AREA_M,
     MIN_DUTY,
-    plan_connector,
     plan_polygon,
-    plan_strips,
-    reverse_plan,
-    rectangle_polygon,
+    rectangle_world_polygon,
     segment_heading,
     segment_length,
     steer_duties,
-    strip_segment,
-    to_world,
     total_planned_length,
     track_errors,
-    trim_segment,
     wrap_angle,
 )
 from helpers.encoder_controller import TICKS_PER_WHEEL_REV, get_encoder_ticks
@@ -63,36 +61,50 @@ METRES_PER_TICK = WHEEL_CIRCUMFERENCE_M / max(1, TICKS_PER_WHEEL_REV)
 ROVER_WIDTH_M = 0.30
 ROVER_LENGTH_M = 0.70
 
-AREA_WIDTH_M = 10.0
-AREA_HEIGHT_M = 10.0
-AREA_POLYGON = []
-# True when AREA_POLYGON holds map coordinates (drawn on the dashboard map) and
-# must be driven where it is; False for the legacy rover-relative rectangle.
-AREA_IS_MAPPED = False
+# ------------------------------------------------------------- work area ----
+# The area is a rectangle in the dashboard's local frame (x east, y north,
+# metres from the saved map origin).  It is set from a coordinate + two side
+# lengths; nothing is planned until one exists.
+AREA_CENTER_X = None
+AREA_CENTER_Y = None
+AREA_WIDTH_M = 0.0            # east-west side
+AREA_HEIGHT_M = 0.0           # north-south side
+MAX_AREA_SIDE_M = 100.0
 
-# The wetted band of one pass, not the chassis width: overridable per install.
+# Width of ground one pass actually covers (the wetted band, not the chassis).
 SWATH_M = DEFAULT_SWATH_M
 SWATH_OVERLAP = DEFAULT_OVERLAP
 
 # ---------------------------------------------------------------- driving ----
 # MIN_DUTY (auto_plan) is the hard floor: below it the gearmotors hum without
-# turning.  Never command a wheel under it, and never *sit* on it either — a
-# duty exactly at the floor leaves the wheels stalled on their own friction.
-# STEER_HEADROOM lifts the straight-line base duty off the floor so a wheel can
-# be sped up or slowed down inside the usable MIN_DUTY..1.0 band.
+# turning.  STEER_HEADROOM lifts the straight-line base duty off that floor so
+# a wheel can be sped up or slowed down inside the usable MIN_DUTY..1.0 band.
 STEER_HEADROOM = 0.10
-AUTO_DRIVE_SPEED = 0.70           # base duty while following a strip
+AUTO_DRIVE_SPEED = 0.90           # base duty while following a strip
 TURN_DUTY = 0.90                  # pivots need more torque than rolling
-TURN_TOLERANCE_RAD = math.radians(2.5)
-TURN_SETTLE_S = 0.15
+
 LOOP_PERIOD_S = 0.02
+TURN_TOLERANCE_RAD = math.radians(4.0)
+TURN_SETTLE_S = 0.15
+POINT_TOLERANCE_M = 0.20          # "arrived" radius for transit/step-across
+POINT_PIVOT_RAD = math.radians(35.0)
+STRIP_END_EPS_M = 0.05            # along-track slack at the far end
+STRIP_END_REACH_M = 0.15          # ... or this close to the end point
+STRIP_START_REACH_M = 0.30        # beyond this, walk over to the strip start
+MAX_HEADING_ERROR_RAD = math.radians(50.0)
 
 K_CROSS = 1.10                    # duty per metre of cross-track error
 K_HEADING = 0.85                  # duty per radian of heading error
 
-STALL_WINDOW_S = 1.2
+# A strip that is not moving for this long / this far is nudged, not killed.
+STALL_WINDOW_S = 1.5
 STALL_TRAVEL_M = 0.03
-MAX_STALLS = 3
+MAX_STALLS = 2
+# Conservative floor used only to size per-strip deadlines.
+STRIP_MIN_SPEED_MPS = 0.05
+STRIP_BASE_TIME_S = 15.0
+MAX_MISSION_S = 1800.0
+TRANSIT_MAX_S = 300.0
 
 # --------------------------------------------------------------- hardware ----
 PROBE_DEPLOY_ANGLE = -20.0        # sensor_servo down into the soil
@@ -105,13 +117,9 @@ ULTRASONIC_PERIOD_S = 0.08        # ~12 Hz pings; the echo read is one behind
 ULTRASONIC_MIN_VALID_CM = 2.0
 OBSTACLE_THRESHOLD_CM = 22.0
 OBSTACLE_CONFIRM_SAMPLES = 2
-OBSTACLE_BACKOFF_M = ROVER_LENGTH_M * 0.45
+OBSTACLE_BACKOFF_M = ROVER_LENGTH_M * 0.40
 OBSTACLE_DETOUR_M = ROVER_LENGTH_M * 0.9
-MAX_EVASIONS_PER_STRIP = 6
-
-MAX_MISSION_S = 1800.0
-# How close to the first strip the rover must already be to skip the drive over.
-TRANSIT_REACH_M = 0.60
+MAX_EVASIONS_PER_STRIP = 4
 
 # ------------------------------------------------------------------ state ----
 auto_mode_active = False
@@ -133,6 +141,7 @@ auto_progress = {
     "incomplete_strips": [],
     "fault": "",
     "status": "idle",
+    "message": "",
 }
 
 
@@ -150,8 +159,70 @@ def set_pose_provider(provider):
     return True
 
 
+def set_work_area(center_x, center_y, width_m, height_m, swath_m=None):
+    """Define the sweep: centre point plus its two side lengths, in metres.
+
+    Coordinates are in the same local frame the dashboard draws in (x east,
+    y north, metres from the map origin), so the mission drives the rectangle
+    exactly where the map shows it.
+    """
+    global AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M
+    try:
+        cx = float(center_x)
+        cy = float(center_y)
+        width = float(width_m)
+        height = float(height_m)
+    except (TypeError, ValueError):
+        print("⚠️ Work area needs numeric centre and side lengths")
+        return False
+    if not all(math.isfinite(value) for value in (cx, cy, width, height)):
+        print("⚠️ Work area values must be finite")
+        return False
+    if not (MIN_AREA_M <= width <= MAX_AREA_SIDE_M
+            and MIN_AREA_M <= height <= MAX_AREA_SIDE_M):
+        print(f"⚠️ Work area sides must be {MIN_AREA_M:.1f}-{MAX_AREA_SIDE_M:.0f} m")
+        return False
+
+    AREA_CENTER_X = cx
+    AREA_CENTER_Y = cy
+    AREA_WIDTH_M = width
+    AREA_HEIGHT_M = height
+    if swath_m is not None:
+        set_swath(swath_m)
+    print(f"📐 Work area set: {width:.1f} x {height:.1f} m "
+          f"centred on ({cx:.1f}, {cy:.1f}) m "
+          f"({width / max(SWATH_M, 0.01):.0f} x {height / max(SWATH_M, 0.01):.0f} passes)")
+    return True
+
+
+def clear_work_area():
+    """Forget the area so a mission cannot start until a new one is set."""
+    global AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M
+    AREA_CENTER_X = AREA_CENTER_Y = None
+    AREA_WIDTH_M = AREA_HEIGHT_M = 0.0
+    print("📐 Work area cleared")
+    return True
+
+
+def has_work_area():
+    return AREA_CENTER_X is not None and AREA_CENTER_Y is not None
+
+
+def get_work_area():
+    if not has_work_area():
+        return None
+    return {
+        "center_x": AREA_CENTER_X,
+        "center_y": AREA_CENTER_Y,
+        "width_m": AREA_WIDTH_M,
+        "height_m": AREA_HEIGHT_M,
+        "swath_m": SWATH_M,
+        "overlap": SWATH_OVERLAP,
+    }
+
+
 def set_swath(swath_m, overlap=None):
-    """Set the width of ground one pass wets (and optionally the overlap)."""
+    """Width of ground one pass wets (optionally the overlap fraction)."""
     global SWATH_M, SWATH_OVERLAP
     try:
         value = float(swath_m)
@@ -172,6 +243,7 @@ def set_swath(swath_m, overlap=None):
 
 
 def set_auto_speed(speed):
+    """Cruise duty (0.2-1.0).  Kept across missions."""
     global AUTO_DRIVE_SPEED
     try:
         value = float(speed)
@@ -181,53 +253,6 @@ def set_auto_speed(speed):
     AUTO_DRIVE_SPEED = max(0.2, min(1.0, value))
     print(f"🚜 Auto speed set to {AUTO_DRIVE_SPEED:.2f} "
           f"(strip duty {_straight_speed():.2f})")
-    return True
-
-
-def set_area(width_m, height_m=None):
-    """Legacy rectangle, measured from the rover's own start pose and heading."""
-    global AREA_WIDTH_M, AREA_HEIGHT_M, AREA_POLYGON, AREA_IS_MAPPED
-    try:
-        width = float(width_m)
-        height = float(height_m) if height_m is not None else AREA_HEIGHT_M
-    except (TypeError, ValueError):
-        print("⚠️ Invalid area")
-        return False
-    if width < 0.5 or height < 0.5:
-        print("⚠️ Area must be at least 0.5 m by 0.5 m")
-        return False
-    AREA_WIDTH_M = width
-    AREA_HEIGHT_M = height
-    AREA_POLYGON = rectangle_polygon(width, height)
-    AREA_IS_MAPPED = False
-    print(f"📐 Area set to {width:.1f} x {height:.1f} m from the rover's start")
-    return True
-
-
-def set_area_polygon(points):
-    """Work area drawn on the map, in map metres (the dashboard's frame).
-
-    The coordinates are kept exactly as given: the mission drives that polygon
-    where it was drawn, not a copy anchored to the rover.
-    """
-    global AREA_POLYGON, AREA_WIDTH_M, AREA_HEIGHT_M, AREA_IS_MAPPED
-    try:
-        polygon = [[float(point[0]), float(point[1])] for point in points]
-    except (TypeError, ValueError, IndexError):
-        print("⚠️ Invalid area polygon")
-        return False
-    if len(polygon) < 3:
-        print("⚠️ Area polygon needs at least three points")
-        return False
-    AREA_POLYGON = polygon
-    AREA_WIDTH_M = max(point[0] for point in polygon) - min(point[0] for point in polygon)
-    AREA_HEIGHT_M = max(point[1] for point in polygon) - min(point[1] for point in polygon)
-    AREA_IS_MAPPED = True
-    centre_x = sum(point[0] for point in polygon) / len(polygon)
-    centre_y = sum(point[1] for point in polygon) / len(polygon)
-    print(f"📐 Area polygon set: {len(polygon)} points, "
-          f"{AREA_WIDTH_M:.1f} x {AREA_HEIGHT_M:.1f} m, "
-          f"centre ({centre_x:.1f}, {centre_y:.1f}) m")
     return True
 
 
@@ -289,8 +314,8 @@ class _Run:
         self.incomplete = []
         self.obstacles = 0
         self.evasions_this_strip = 0
-        self.stalls = 0
         self.fault = ""
+        self.message = ""
         self.distance_since_soil = 0.0
         self.ultrasonic = use_ultrasonic
         self.sampler = _DistanceSampler()
@@ -406,7 +431,7 @@ def _heading_rad(run):
     return math.radians(_pose(run)["heading_deg"])
 
 
-def _sleep(run, seconds):
+def _pause(run, seconds):
     """Sleep in small slices so an abort is honoured within ~20 ms."""
     end = time.monotonic() + max(0.0, seconds)
     while time.monotonic() < end:
@@ -416,11 +441,15 @@ def _sleep(run, seconds):
     return not run.aborted()
 
 
-def _halt_tools():
+def _halt():
     try:
         stop()
     except Exception:
         pass
+
+
+def _halt_tools():
+    _halt()
     try:
         WATER_PUMP.turnOffPump()
     except Exception:
@@ -435,6 +464,11 @@ def _retract_probe():
 
 
 def _freeze_gps_heading(run):
+    """Stop GPS course from pulling the heading while strips are followed.
+
+    Position fusion stays active; only the course blend fights the gyro-closed
+    turns, and mid-strip it makes the rover weave.
+    """
     owner = getattr(_pose_provider, "__self__", None)
     if owner is not None and hasattr(owner, "set_gps_heading_blend"):
         try:
@@ -457,16 +491,16 @@ def _release_gps_heading(run):
 def _status(run):
     if run.fault:
         return "fault"
-    if run.total and run.completed >= run.total:
-        return "done"
     if run.finished:
-        return "partial"
+        return "partial" if run.incomplete else "done"
     return "running"
 
 
-def _publish(run, phase=None, **extra):
+def _publish(run, phase=None, message=None, **extra):
     if phase is not None:
         run.phase = phase
+    if message is not None:
+        run.message = message
     if not _is_current(run):
         return auto_progress
     total = run.total_m
@@ -481,38 +515,11 @@ def _publish(run, phase=None, **extra):
         "incomplete_strips": list(run.incomplete),
         "fault": run.fault,
         "status": _status(run),
+        "message": run.message,
     })
     auto_progress.update(extra)
     _update_tick_telemetry()
     return auto_progress
-
-
-# --------------------------------------------------------------- obstacles ---
-def _obstacle_ahead(run):
-    """Two consecutive fresh short readings count as an obstacle."""
-    if not run.ultrasonic:
-        return False
-    distance, fresh = run.sampler.read()
-    if not fresh:
-        return False
-    if distance <= OBSTACLE_THRESHOLD_CM:
-        run.obstacle_hits += 1
-    else:
-        run.obstacle_hits = 0
-    return run.obstacle_hits >= OBSTACLE_CONFIRM_SAMPLES
-
-
-def _lane_clear(run):
-    """Fresh confirmation that a sideways detour is not itself blocked."""
-    if not run.ultrasonic:
-        return True
-    readings = []
-    for _ in range(2):
-        distance, fresh = run.sampler.read(force=True)
-        readings.append(None if not fresh else distance)
-        if not _sleep(run, 0.12):
-            return False
-    return all(value is None or value > OBSTACLE_THRESHOLD_CM for value in readings)
 
 
 # ---------------------------------------------------------------- movement ---
@@ -526,263 +533,324 @@ def _drive_tank_safe(left, right):
 def _straight_speed():
     """Base duty for a strip: above the motors' floor, inside the usable band.
 
-    The floor is MIN_DUTY; stopping the base duty there would leave the wheels
-    on the edge of stalling with no downward steering authority left, which is
-    what made the first strip time out as a stall instead of being driven.
+    Stopping the base duty at MIN_DUTY would leave the wheels on the edge of
+    stalling with no downward steering authority left.
     """
     return max(MIN_DUTY + STEER_HEADROOM, min(1.0, AUTO_DRIVE_SPEED))
 
 
-def _follow_segment(run, segment, allow_soil_check=True):
-    """Follow one straight segment with continuous cross-track correction.
-
-    Returns (distance_driven_m, reason) with reason one of "done",
-    "aborted", "obstacle", "soil", "stalled" or "timeout".
-    """
-    length = segment_length(segment)
-    if length <= 0.02:
-        return 0.0, "done"
-
-    pose = _pose(run)
-    along, _cross = track_errors(pose["x_m"], pose["y_m"], segment)
-    start_along = max(0.0, min(length, along))
-    last_along = start_along
-    driven = 0.0
-    stall_ref_time = time.monotonic()
-    stall_ref_pose = (pose["x_m"], pose["y_m"])
-    speed = _straight_speed()
-
-    while not run.aborted():
-        pose = _pose(run)
-        along, cross = track_errors(pose["x_m"], pose["y_m"], segment)
-        along = max(0.0, min(length, along))
-        driven = max(driven, along - start_along)
-
-        if along >= length - 0.02:
-            stop()
-            return driven, "done"
-
-        if _obstacle_ahead(run):
-            stop()
-            return driven, "obstacle"
-
-        run.distance_since_soil += max(0.0, along - last_along)
-        last_along = along
-        if allow_soil_check and run.distance_since_soil >= SOIL_CHECK_INTERVAL_M:
-            stop()
-            return driven, "soil"
-
-        # Mission-level time limit: never let one run occupy the rover forever.
-        now = time.monotonic()
-        if now - run.started > MAX_MISSION_S:
-            stop()
-            return driven, "timeout"
-
-        # Stall watchdog: commanded motion without progress means a wheel is
-        # buried or the gearbox is jammed against something.
-        if now - stall_ref_time >= STALL_WINDOW_S:
-            moved = math.hypot(pose["x_m"] - stall_ref_pose[0],
-                               pose["y_m"] - stall_ref_pose[1])
-            if moved < STALL_TRAVEL_M:
-                stop()
-                return driven, "stalled"
-            stall_ref_time = now
-            stall_ref_pose = (pose["x_m"], pose["y_m"])
-
-        left, right, _along, _cross, _err = steer_duties(
-            segment, pose, speed, K_CROSS, K_HEADING, MIN_DUTY
-        )
-        _publish(run, along_m=round(along, 2), cross_track_m=round(cross, 2))
-        _drive_tank_safe(left, right)
-        time.sleep(LOOP_PERIOD_S)
-
-    stop()
-    return driven, "aborted"
+def _reverse_distance(run, metres):
+    """Back up by an encoder-measured distance (relative delta, no reset)."""
+    left0, right0 = get_encoder_ticks()
+    target_ticks = max(1.0, abs(float(metres)) / METRES_PER_TICK)
+    deadline = time.monotonic() + 4.0 + abs(float(metres)) * 5.0
+    try:
+        reverse(max(MIN_DUTY + STEER_HEADROOM, TURN_DUTY))
+        while not run.aborted() and time.monotonic() < deadline:
+            left, right = get_encoder_ticks()
+            moved = (abs(left - left0) + abs(right - right0)) * 0.5
+            if moved >= target_ticks:
+                break
+            time.sleep(LOOP_PERIOD_S)
+    finally:
+        _halt()
+    _pause(run, 0.1)
+    return not run.aborted()
 
 
-def _turn_to_heading(run, target_rad, timeout_s=None):
+def _pivot_to(run, target_rad):
     """Rotate in place to an absolute heading, closed on the gyro.
 
     The gyro is the authority; wheel-tracked arc length is only the fallback
-    when the IMU is absent.  Either way the turn always ends with a timeout, so
-    a lost sensor cannot leave the rover spinning.
+    when the IMU is absent.  Either way the turn always ends with a timeout,
+    so a lost sensor cannot leave the rover spinning.
     """
+    target_rad = wrap_angle(target_rad)
     start_heading = _heading_rad(run)
     delta = abs(wrap_angle(target_rad - start_heading))
     if delta <= TURN_TOLERANCE_RAD:
-        stop()
+        _halt()
         return True
 
-    budget = timeout_s if timeout_s is not None else 4.0 + delta * 2.0
-    deadline = time.monotonic() + budget
+    deadline = time.monotonic() + 5.0 + delta * 3.0
     imu_ready = bool(get_imu_snapshot().get("available"))
     left_ticks0, right_ticks0 = get_encoder_ticks()
     target_arc = max(0.0, delta - TURN_TOLERANCE_RAD) * (WHEEL_TRACK_M / 2.0)
+    direction = 1.0 if wrap_angle(target_rad - start_heading) > 0 else -1.0
 
     while not run.aborted():
         if time.monotonic() > deadline:
-            stop()
-            print("⚠️ Turn timed out; continuing on the current heading")
+            _halt()
+            print(f"⚠️ Turn timed out {math.degrees(delta):.0f}° short; "
+                  f"continuing on the current heading")
             return False
 
         if imu_ready:
             error = wrap_angle(target_rad - _heading_rad(run))
             if abs(error) <= TURN_TOLERANCE_RAD:
-                stop()
-                time.sleep(TURN_SETTLE_S)
+                _halt()
+                _pause(run, TURN_SETTLE_S)
                 return True
-            # Constant pivot duty, not scaled by the error: scaling it down as
-            # the heading closes meant the last few degrees were driven at the
-            # hum floor, where the wheels stall instead of creeping round.
-            duty = TURN_DUTY
             if error > 0:
-                turnLeft(duty)
+                turnLeft(TURN_DUTY)
             else:
-                turnRight(duty)
+                turnRight(TURN_DUTY)
         else:
             left, right = get_encoder_ticks()
             arc = (abs(left - left_ticks0) + abs(right - right_ticks0)) * 0.5 * METRES_PER_TICK
             if arc >= target_arc:
-                stop()
-                time.sleep(TURN_SETTLE_S)
+                _halt()
+                _pause(run, TURN_SETTLE_S)
                 return True
-            if wrap_angle(target_rad - start_heading) > 0:
+            if direction > 0:
                 turnLeft(TURN_DUTY)
             else:
                 turnRight(TURN_DUTY)
 
         time.sleep(LOOP_PERIOD_S)
 
-    stop()
+    _halt()
     return False
 
 
-def _reverse_distance(run, metres, duty=0.45):
-    """Back up by an encoder-measured distance (relative delta, no reset)."""
-    left0, right0 = get_encoder_ticks()
-    target_ticks = max(1.0, abs(metres) / METRES_PER_TICK)
-    deadline = time.monotonic() + 2.0 + abs(metres) * 4.0
-    # Reversing drags the whole chassis: always give it duty with margin over
-    # the floor, never a value that only buzzes.
-    reverse(max(MIN_DUTY + STEER_HEADROOM, min(1.0, duty)))
-    while not run.aborted() and time.monotonic() < deadline:
-        left, right = get_encoder_ticks()
-        moved = (abs(left - left0) + abs(right - right0)) * 0.5
-        if moved >= target_ticks:
-            break
-        time.sleep(LOOP_PERIOD_S)
-    stop()
-    time.sleep(0.1)
-    return not run.aborted()
-
-
-def _avoid_obstacle(run, segment):
-    """Back off, sidestep around the obstacle, then rejoin the same line.
-
-    The detour never has to be geometrically exact: the follower's cross-track
-    term pulls the rover back onto the strip afterwards.
-    """
-    run.evasions_this_strip += 1
-    run.obstacles += 1
-    run.obstacle_hits = 0
-    _publish(run, phase="obstacle", evasions_this_strip=run.evasions_this_strip)
-    print(f"🚧 Obstacle {run.obstacles} on strip {run.index + 1}: "
-          f"backing off and sidestepping")
-
-    _halt_tools()
-    if not _sleep(run, 0.2):
+def _obstacle_ahead(run):
+    """Two consecutive fresh short readings count as an obstacle."""
+    if not run.ultrasonic:
         return False
-    if not _reverse_distance(run, OBSTACLE_BACKOFF_M):
+    distance, fresh = run.sampler.read()
+    if not fresh or distance is None:
         return False
-
-    heading = segment_heading(segment)
-    side = 1.0 if run.evasions_this_strip % 2 else -1.0   # alternate sides
-    for attempt in (side, -side):
-        detour_heading = wrap_angle(heading + attempt * math.pi / 2.0)
-        if not _turn_to_heading(run, detour_heading):
-            return False
-        if _lane_clear(run):
-            break
+    if distance <= OBSTACLE_THRESHOLD_CM:
+        run.obstacle_hits += 1
     else:
-        print("⚠️ Both sides look blocked; abandoning this strip")
-        return False
+        run.obstacle_hits = 0
+    return run.obstacle_hits >= OBSTACLE_CONFIRM_SAMPLES
 
+
+def _drive_to_point(run, x, y, tolerance_m=POINT_TOLERANCE_M, timeout_s=None):
+    """Drive to a point on the map, pivoting first when it is behind us."""
     pose = _pose(run)
-    start_x, start_y = pose["x_m"], pose["y_m"]
-    end_x = start_x + math.cos(detour_heading) * OBSTACLE_DETOUR_M
-    end_y = start_y + math.sin(detour_heading) * OBSTACLE_DETOUR_M
-    detour = {
-        "index": segment.get("index", 0),
-        "x0": start_x, "y0": start_y,
-        "x1": end_x, "y1": end_y,
-        "length_m": OBSTACLE_DETOUR_M,
-    }
-    _follow_segment(run, detour, allow_soil_check=False)
-    if not _turn_to_heading(run, heading):
-        return False
+    distance = math.hypot(x - pose["x_m"], y - pose["y_m"])
+    if distance <= tolerance_m:
+        return True
+    deadline = time.monotonic() + (
+        float(timeout_s) if timeout_s is not None else 10.0 + distance * 15.0
+    )
+    speed = _straight_speed()
+    while not run.aborted():
+        if time.monotonic() > deadline:
+            _halt()
+            print("⚠️ Could not reach the target point in time")
+            return False
 
-    _publish(run, phase="driving")
-    return not run.aborted()
+        pose = _pose(run)
+        dx, dy = x - pose["x_m"], y - pose["y_m"]
+        distance = math.hypot(dx, dy)
+        if distance <= tolerance_m:
+            _halt()
+            return True
+
+        target = math.atan2(dy, dx)
+        error = wrap_angle(target - _heading_rad(run))
+        if abs(error) > POINT_PIVOT_RAD:
+            _halt()
+            if not _pivot_to(run, target):
+                return not run.aborted()
+            continue
+
+        correction = K_HEADING * error
+        left = max(MIN_DUTY, min(1.0, speed - correction))
+        right = max(MIN_DUTY, min(1.0, speed + correction))
+        _publish(run, phase="transit",
+                 message=f"driving to the area ({distance:.1f} m)")
+        _drive_tank_safe(left, right)
+        time.sleep(LOOP_PERIOD_S)
+
+    _halt()
+    return False
 
 
-def _stalled(run, segment):
-    """Nudge out of a stall; three in a row is a fault worth stopping for."""
-    run.stalls += 1
-    print(f"⚠️ No progress on strip {run.index + 1} (stall {run.stalls}/{MAX_STALLS})")
-    _halt_tools()
-    if run.stalls >= MAX_STALLS:
-        return False
-    if not _sleep(run, 0.3):
-        return False
-    _reverse_distance(run, 0.15)
-    _turn_to_heading(run, segment_heading(segment) + (0.25 if run.stalls % 2 else -0.25))
-    _turn_to_heading(run, segment_heading(segment))
-    return not run.aborted()
+def _follow_segment(run, segment, *, max_distance=None, water=False):
+    """Follow a straight segment with continuous cross-track correction.
+
+    Returns (distance_driven_m, reason) with reason one of "done", "aborted",
+    "obstacle", "soil", "stalled" or "timeout".
+    """
+    length = segment_length(segment)
+    if length <= STRIP_END_EPS_M:
+        return 0.0, "done"
+
+    limit = length if max_distance is None else min(length, float(max_distance))
+    pose = _pose(run)
+    along, _cross = track_errors(pose["x_m"], pose["y_m"], segment)
+    start_along = max(0.0, min(length, along))
+    last_along = start_along
+    driven = 0.0
+    speed = _straight_speed()
+    deadline = time.monotonic() + STRIP_BASE_TIME_S + limit / STRIP_MIN_SPEED_MPS
+    stall_ref_time = time.monotonic()
+    stall_ref_pose = (pose["x_m"], pose["y_m"])
+    target_heading = segment_heading(segment)
+
+    try:
+        if water:
+            try:
+                WATER_PUMP.turnOnPump()
+            except Exception as exc:
+                print(f"⚠️ Could not start the pump ({exc})")
+
+        while not run.aborted():
+            pose = _pose(run)
+            along, cross = track_errors(pose["x_m"], pose["y_m"], segment)
+            along = max(0.0, min(length, along))
+            driven = max(driven, along - start_along)
+            end_gap = math.hypot(pose["x_m"] - segment["x1"],
+                                 pose["y_m"] - segment["y1"])
+
+            if along >= start_along + limit - STRIP_END_EPS_M:
+                _halt()
+                return driven, "done"
+            if limit >= length - STRIP_END_EPS_M and end_gap <= STRIP_END_REACH_M:
+                _halt()
+                return driven, "done"
+
+            if _obstacle_ahead(run):
+                _halt()
+                return driven, "obstacle"
+
+            run.distance_since_soil += max(0.0, along - last_along)
+            last_along = along
+            if run.distance_since_soil >= SOIL_CHECK_INTERVAL_M:
+                _halt()
+                return driven, "soil"
+
+            # Mission-level time limit: never let one run occupy the rover
+            # forever.
+            now = time.monotonic()
+            if now - run.started > MAX_MISSION_S:
+                _halt()
+                return driven, "timeout"
+
+            # Stall watchdog: commanded motion without progress means a wheel
+            # is buried or the gearbox is jammed against something.
+            if now - stall_ref_time >= STALL_WINDOW_S:
+                moved = math.hypot(pose["x_m"] - stall_ref_pose[0],
+                                   pose["y_m"] - stall_ref_pose[1])
+                if moved < STALL_TRAVEL_M:
+                    _halt()
+                    return driven, "stalled"
+                stall_ref_time = now
+                stall_ref_pose = (pose["x_m"], pose["y_m"])
+
+            heading_error = wrap_angle(target_heading - _heading_rad(run))
+            if abs(heading_error) > MAX_HEADING_ERROR_RAD:
+                # Sideways or reversed (after a detour): line up again.
+                _halt()
+                if not _pivot_to(run, target_heading):
+                    return driven, "timeout"
+                continue
+
+            left, right, _along, _cross, _err = steer_duties(
+                segment, pose, speed, K_CROSS, K_HEADING, MIN_DUTY
+            )
+            _publish(run, along_m=round(along, 2), cross_track_m=round(cross, 2))
+            _drive_tank_safe(left, right)
+            time.sleep(LOOP_PERIOD_S)
+    finally:
+        if water:
+            try:
+                WATER_PUMP.turnOffPump()
+            except Exception:
+                pass
+
+    _halt()
+    return driven, "aborted"
 
 
 # -------------------------------------------------------------- soil/water ---
 def _water_along(run, segment, metres=WATERING_RUN_M):
     """Drive a stretch with the pump on, cross-track corrected like a strip."""
-    pose = _pose(run)
-    along, _cross = track_errors(pose["x_m"], pose["y_m"], segment)
-    patch = trim_segment(segment, max(0.0, along), metres)
-    if patch["length_m"] <= 0.02:
-        return 0.0
-    _publish(run, phase="watering")
+    _publish(run, phase="watering", message="watering the dry patch")
     try:
-        WATER_PUMP.turnOnPump()
-        driven, reason = _follow_segment(run, patch, allow_soil_check=False)
+        driven, reason = _follow_segment(run, segment, max_distance=metres)
     finally:
-        WATER_PUMP.turnOffPump()
-        _halt_tools()
+        try:
+            WATER_PUMP.turnOffPump()
+        except Exception:
+            pass
+        _halt()
+    # The stretch just driven was watered, so start the next probe interval
+    # from here rather than probing again a few centimetres later.
+    run.distance_since_soil = 0.0
     print(f"💧 Watered {driven:.2f} m ({reason})")
     return driven
 
 
 def _soil_step(run, segment):
     """Probe the soil, water the stretch ahead when it reads dry."""
-    _publish(run, phase="checking_soil")
-    _halt_tools()
-    if not _sleep(run, 0.3):
+    _publish(run, phase="soil", message="checking soil moisture")
+    _halt()
+    if not _pause(run, 0.3):
         return
     run.distance_since_soil = 0.0
+    state = ""
     try:
         sensor_servo.angle = PROBE_DEPLOY_ANGLE
-        if not _sleep(run, PROBE_SETTLE_S):
+        if not _pause(run, PROBE_SETTLE_S):
             return
         state = str(MOISTURE_SENSOR.getSoilMoistureState()).strip().lower()
-        _retract_probe()
-        if not _sleep(run, 0.6):
-            return
-        print(f"🌱 Soil reads {state or 'unknown'} at strip {run.index + 1}")
-        if state == "dry":
-            _water_along(run, segment)
-        else:
-            _publish(run, phase="driving")
     except Exception as exc:
         print(f"⚠️ Soil check failed ({exc})")
     finally:
         _retract_probe()
+    if not _pause(run, 0.6):
+        return
+    print(f"🌱 Soil reads {state or 'unknown'} at strip {run.index + 1}")
+    if state == "dry":
+        _water_along(run, segment)
+    else:
+        _publish(run, phase="driving")
+
+
+# --------------------------------------------------------------- obstacles ---
+def _sidestep(run, segment):
+    """Back off, drive around the obstruction, then rejoin the same strip.
+
+    The detour never has to be geometrically exact: the follower's cross-track
+    term pulls the rover back onto the line afterwards.
+    """
+    heading = segment_heading(segment)
+    side = 1.0 if run.obstacles % 2 else -1.0   # alternate sides
+    print(f"🚧 Obstacle {run.obstacles} on strip {run.index + 1}: "
+          f"backing off and stepping around it")
+    _halt()
+    if not _pause(run, 0.2):
+        return False
+    _reverse_distance(run, OBSTACLE_BACKOFF_M)
+
+    detour_heading = wrap_angle(heading + side * math.pi / 2.0)
+    if not _pivot_to(run, detour_heading):
+        return not run.aborted()
+
+    pose = _pose(run)
+    target_x = pose["x_m"] + math.cos(detour_heading) * OBSTACLE_DETOUR_M
+    target_y = pose["y_m"] + math.sin(detour_heading) * OBSTACLE_DETOUR_M
+    _drive_to_point(run, target_x, target_y, timeout_s=30.0)
+    _pivot_to(run, heading)
+    return not run.aborted()
+
+
+def _recover_stall(run, segment):
+    """Nudge out of a stall: back off and re-align with the strip."""
+    heading = segment_heading(segment)
+    print(f"⚠️ No progress on strip {run.index + 1}; nudging free")
+    _halt()
+    if not _pause(run, 0.3):
+        return False
+    _reverse_distance(run, 0.2)
+    _pivot_to(run, wrap_angle(heading + 0.3))
+    _pivot_to(run, heading)
+    return not run.aborted()
 
 
 # ----------------------------------------------------------------- mission ---
@@ -794,55 +862,52 @@ def _orient_plan(pose, plan):
     last = plan[-1]
     to_first = math.hypot(first["x0"] - pose["x_m"], first["y0"] - pose["y_m"])
     to_last = math.hypot(last["x1"] - pose["x_m"], last["y1"] - pose["y_m"])
-    return plan if to_first <= to_last else reverse_plan(plan)
+    if to_last < to_first:
+        flipped = []
+        for segment in reversed(plan):
+            flipped.append({
+                "index": segment.get("index", 0),
+                "x0": segment["x1"], "y0": segment["y1"],
+                "x1": segment["x0"], "y1": segment["y0"],
+                "length_m": segment_length(segment),
+            })
+        return flipped
+    return plan
 
 
 def _build_plan(run):
-    """Strips in map coordinates.
-
-    A dashboard work area is a polygon on the map, so it is driven exactly
-    where it was drawn.  The legacy rectangle (set_area, or no area at all) is
-    measured from the rover's own start pose and heading instead.
-    """
-    pose = _pose(run)
-
-    if AREA_POLYGON and AREA_IS_MAPPED:
-        plan = plan_polygon(AREA_POLYGON, SWATH_M, SWATH_OVERLAP)
-        source = "map polygon"
-    else:
-        polygon = AREA_POLYGON or rectangle_polygon(AREA_WIDTH_M, AREA_HEIGHT_M)
-        origin_x, origin_y = pose["x_m"], pose["y_m"]
-        heading = math.radians(pose["heading_deg"])
-        plan = [
-            to_world(strip_segment(strip, index), origin_x, origin_y, heading)
-            for index, strip in enumerate(plan_strips(polygon, SWATH_M, SWATH_OVERLAP))
-        ]
-        source = "rover-relative rectangle"
-
+    """Strips covering the dashboard work area, in map coordinates."""
+    if not has_work_area():
+        raise RuntimeError("set the work area on the map before starting")
+    polygon = rectangle_world_polygon(
+        AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M
+    )
+    plan = plan_polygon(polygon, SWATH_M, SWATH_OVERLAP)
     if not plan:
-        raise RuntimeError("the work area produced no strips")
-
-    plan = _orient_plan(pose, plan)
-    run.strips = plan
-    run.total = len(plan)
-    run.total_m = total_planned_length(plan)
+        raise RuntimeError(
+            f"a {AREA_WIDTH_M:.1f} x {AREA_HEIGHT_M:.1f} m area produced no strips"
+        )
     start = plan[0]
-    print(f"🗺️  Plan: {run.total} strips, {run.total_m:.1f} m, "
-          f"swath {SWATH_M:.2f} m ({source}), first strip starts at "
+    print(f"🗺️  Plan: {len(plan)} strips, {total_planned_length(plan):.1f} m, "
+          f"swath {SWATH_M:.2f} m, first strip starts at "
           f"({start['x0']:.1f}, {start['y0']:.1f}) heading "
           f"{math.degrees(segment_heading(start)):.0f}°")
     return plan
 
 
-def _run_segment(run, segment, check_soil=True, count_coverage=True):
-    """Drive one segment to the end, recovering from soil checks and obstacles."""
+def _run_strip(run, segment):
+    """Drive one strip, recovering from soil checks, stalls and obstacles.
+
+    Returns True when the strip was covered.  Anything unrecoverable marks the
+    strip incomplete and returns False; the mission then moves on.
+    """
+    stalls = 0
+    run.evasions_this_strip = 0
     while not run.aborted():
-        driven, reason = _follow_segment(run, segment, allow_soil_check=check_soil)
+        driven, reason = _follow_segment(run, segment)
         if reason == "done":
-            if count_coverage:
-                run.completed += 1
-                run.covered_m += segment_length(segment)
-            run.stalls = 0
+            run.completed += 1
+            run.covered_m += segment_length(segment)
             _publish(run, phase="driving")
             return True
         if reason == "aborted":
@@ -851,110 +916,105 @@ def _run_segment(run, segment, check_soil=True, count_coverage=True):
             _soil_step(run, segment)
             continue
         if reason == "obstacle":
-            _publish(run, phase="obstacle")
-            if run.evasions_this_strip >= MAX_EVASIONS_PER_STRIP:
-                if count_coverage:
-                    print(f"⚠️ Strip {run.index + 1} blocked after "
-                          f"{run.evasions_this_strip} evasions; leaving it incomplete")
-                    run.incomplete.append(run.index + 1)
-                    run.covered_m += driven
-                    _publish(run, phase="driving")
+            run.evasions_this_strip += 1
+            run.obstacles += 1
+            run.obstacle_hits = 0
+            if run.evasions_this_strip > MAX_EVASIONS_PER_STRIP:
+                print(f"⚠️ Strip {run.index + 1} stays blocked; leaving it incomplete")
+                run.covered_m += driven
                 return False
-            if not _avoid_obstacle(run, segment):
-                if run.aborted():
-                    return False
-                if count_coverage:
-                    run.incomplete.append(run.index + 1)
-                    run.covered_m += driven
+            _publish(run, phase="obstacle",
+                     message=f"obstacle on strip {run.index + 1}")
+            if not _sidestep(run, segment):
                 return False
             continue
         if reason == "stalled":
-            if not _stalled(run, segment):
-                run.fault = f"stalled on strip {run.index + 1}"
+            stalls += 1
+            if stalls > MAX_STALLS:
+                print(f"⚠️ Strip {run.index + 1} will not move; "
+                      f"leaving it incomplete")
+                run.covered_m += driven
+                return False
+            if not _recover_stall(run, segment):
                 return False
             continue
         if reason == "timeout":
-            run.fault = f"mission time limit ({MAX_MISSION_S:.0f} s) reached"
+            print(f"⚠️ Strip {run.index + 1} did not finish in time; "
+                  f"leaving it incomplete")
+            run.covered_m += driven
             return False
     return False
 
 
-def _run_strip(run, segment):
-    return _run_segment(run, segment)
-
-
-def _transit_to(run, segment):
-    """Drive over to the work area: no soil probing and no coverage credit."""
-    _publish(run, phase="transit")
-    if not _turn_to_heading(run, segment_heading(segment)):
-        return False
-    return _run_segment(run, segment, check_soil=False, count_coverage=False)
-
-
 def _mission(run):
-    _publish(run, phase="planning")
-    _freeze_gps_heading(run)
-
+    _publish(run, phase="planning", message="planning the sweep")
     plan = _build_plan(run)
-    run.stalls = 0
+    _freeze_gps_heading(run)
+    try:
+        pose = _pose(run)
+        plan = _orient_plan(pose, plan)
+        run.strips = plan
+        run.total = len(plan)
+        run.total_m = total_planned_length(plan)
+        _publish(run)
 
-    first = plan[0]
-    pose = _pose(run)
-    start_gap = math.hypot(first["x0"] - pose["x_m"], first["y0"] - pose["y_m"])
-    if start_gap > TRANSIT_REACH_M:
-        print(f"🚗 Driving {start_gap:.1f} m to the first strip")
-        transit = {
-            "index": 0,
-            "x0": pose["x_m"], "y0": pose["y_m"],
-            "x1": first["x0"], "y1": first["y0"],
-            "length_m": start_gap,
-        }
-        if not _transit_to(run, transit):
-            if not run.aborted():
-                run.fault = "could not reach the work area"
-            return
-        if not _turn_to_heading(run, segment_heading(first)):
-            run.fault = "could not line up with the first strip"
-            return
-    _publish(run, phase="driving")
+        first = plan[0]
+        pose = _pose(run)
+        gap = math.hypot(first["x0"] - pose["x_m"], first["y0"] - pose["y_m"])
+        if gap > POINT_TOLERANCE_M:
+            print(f"🚗 Driving {gap:.1f} m to the work area")
+            _publish(run, phase="transit",
+                     message=f"driving {gap:.1f} m to the work area")
+            if not _drive_to_point(run, first["x0"], first["y0"],
+                                   timeout_s=TRANSIT_MAX_S):
+                if not run.aborted():
+                    run.fault = "could not reach the work area"
+                return
 
-    for index, segment in enumerate(plan):
-        if run.aborted():
-            return
-        run.index = index
-        run.evasions_this_strip = 0
-        run.stalls = 0
-        _publish(run, phase="driving")
+        for index, segment in enumerate(plan):
+            if run.aborted():
+                return
+            if time.monotonic() - run.started > MAX_MISSION_S:
+                run.fault = f"mission time limit ({MAX_MISSION_S:.0f} s) reached"
+                return
 
-        completed = _run_strip(run, segment)
-        if run.aborted():
-            return
-        if not completed and run.fault:
-            return
+            run.index = index
+            heading = segment_heading(segment)
 
-        following = plan[index + 1] if index + 1 < len(plan) else None
-        if following is None:
-            break
+            # Walk onto the strip start first (the step across to the next row
+            # is only a few decimetres), then line up with the pass.
+            pose = _pose(run)
+            start_gap = math.hypot(segment["x0"] - pose["x_m"],
+                                   segment["y0"] - pose["y_m"])
+            if start_gap > STRIP_START_REACH_M:
+                _publish(run, phase="turning",
+                         message=f"moving onto strip {index + 1}/{run.total}")
+                _drive_to_point(run, segment["x0"], segment["y0"],
+                                tolerance_m=0.25)
+            if run.aborted():
+                return
+            _publish(run, phase="turning",
+                     message=f"lining up strip {index + 1}/{run.total}")
+            _pivot_to(run, heading)
+            if run.aborted():
+                return
 
-        connector = plan_connector(segment, following)
-        if connector is None:
-            continue
-        _publish(run, phase="turning")
-        if not _turn_to_heading(run, segment_heading(connector)):
-            run.fault = f"turn failed after strip {index + 1}"
-            return
-        _follow_segment(run, connector, allow_soil_check=False)
-        if run.aborted():
-            return
-        if not _turn_to_heading(run, segment_heading(following)):
-            run.fault = f"turn failed entering strip {index + 2}"
-            return
+            _publish(run, phase="driving",
+                     message=f"strip {index + 1}/{run.total}")
+            if not _run_strip(run, segment):
+                if run.aborted():
+                    return
+                if index + 1 not in run.incomplete:
+                    run.incomplete.append(index + 1)
 
-    run.finished = True
-    run.phase = "done"
-    print(f"✅ Coverage finished: {run.completed}/{run.total} strips, "
-          f"{run.covered_m:.1f} m driven"
-          + (f", incomplete {run.incomplete}" if run.incomplete else ""))
+        run.finished = True
+        _publish(run, phase="done", message="sweep finished")
+        print(f"✅ Coverage finished: {run.completed}/{run.total} strips, "
+              f"{run.covered_m:.1f} m driven"
+              + (f", incomplete {run.incomplete}" if run.incomplete else ""))
+    finally:
+        _release_gps_heading(run)
+        _halt_tools()
 
 
 def _is_current(run):
@@ -966,7 +1026,6 @@ def _finish(run, fault=""):
     if fault:
         run.fault = fault
         print(f"❌ Auto mission stopped: {fault}")
-    _release_gps_heading(run)
     # A mission that has already been replaced must not touch the hardware or
     # the progress the new mission is publishing.
     if not _is_current(run):
@@ -975,7 +1034,9 @@ def _finish(run, fault=""):
     _halt_tools()
     _retract_probe()
     auto_mode_active = False
-    _publish(run, phase="fault" if fault else "idle")
+    # A finished sweep keeps its "done" phase so the dashboard can say so;
+    # only a mission that never got going falls back to idle.
+    _publish(run, phase="fault" if fault else ("done" if run.finished else "idle"))
 
 
 def _mission_thread(run):
@@ -1000,6 +1061,10 @@ def start_auto_mode():
         if auto_mode_active and auto_thread is not None and auto_thread.is_alive():
             print("ℹ️ Auto mode already running")
             return True
+
+        if not has_work_area():
+            print("⚠️ No work area set - pick the area coordinates first")
+            return False
 
         if auto_thread is not None and auto_thread.is_alive():
             auto_thread.join(timeout=2.5)
@@ -1033,6 +1098,7 @@ def stop_auto_mode():
 
     auto_progress["phase"] = "idle"
     auto_progress["status"] = "stopped"
+    auto_progress["message"] = ""
     _update_tick_telemetry()
     print("⏹️ Auto mode stopped")
     return False
@@ -1048,18 +1114,16 @@ __all__ = [
     "TICKS_PER_WHEEL_REV",
     "ROVER_WIDTH_M",
     "ROVER_LENGTH_M",
-    "AREA_WIDTH_M",
-    "AREA_HEIGHT_M",
-    "AREA_POLYGON",
-    "AUTO_DRIVE_SPEED",
     "SWATH_M",
     "SWATH_OVERLAP",
     "auto_progress",
     "set_pose_provider",
     "set_swath",
     "set_auto_speed",
-    "set_area",
-    "set_area_polygon",
+    "set_work_area",
+    "clear_work_area",
+    "has_work_area",
+    "get_work_area",
     "set_rover_size",
     "start_auto_mode",
     "stop_auto_mode",

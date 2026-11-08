@@ -16,12 +16,9 @@ const modeTxt = document.getElementById("modeTxt");
 const wsStatusTxt = document.getElementById("wsStatusTxt");
 const connectionDot = document.getElementById("connectionDot");
 const toast = document.getElementById("toast");
-const sidebar = document.getElementById("sidebar");
-const mobileBackdrop = document.getElementById("mobileBackdrop");
-const sidebarClock = document.getElementById("sidebarClock");
 const missionPercent = document.getElementById("missionPercent");
-const missionActionLabel = document.getElementById("missionActionLabel");
 const throttleOutput = document.getElementById("throttleOutput");
+const areaSummary = document.getElementById("areaSummary");
 
 // New Auto Config Elements
 const autoSpeedSlider = document.getElementById("autoSpeedSlider");
@@ -60,8 +57,8 @@ const baseURL = window.location.origin;
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 const wsURL = `${wsProtocol}//${window.location.host}/ws`;
 
-// Command PIN: the field appears in the sidebar only when the server
-// enforces one (telemetry pin_required), and the value persists locally.
+// Command PIN: the field appears in the header only when the server enforces
+// one (telemetry pin_required), and the value persists locally.
 let roverPin = localStorage.getItem("roverPin") || "";
 if (pinInput) {
   pinInput.value = roverPin;
@@ -84,7 +81,7 @@ function roverFetch(url, opts = {}) {
       return {
         ok: false,
         status: 401,
-        json: () => Promise.resolve({ success: false, error: "PIN required — set it in the sidebar" }),
+        json: () => Promise.resolve({ success: false, error: "PIN required — enter it in the header" }),
       };
     }
     return res;
@@ -93,16 +90,15 @@ function roverFetch(url, opts = {}) {
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
-let polygonDraft = [];
-let mapDrawing = false;
+let pickAreaCentre = false; // next map tap chooses the work area centre
+let roverAutoActive = false;
 const mapOriginDefault = [6.5244, 3.3792];
 let mapOrigin = mapOriginDefault.slice();
 let lastPose = null;
 let leafletMap = null;
 let roverMarker = null;
 let workAreaLayer = null;
-let draftLayer = null;
-let offsetPreviewLayer = null;
+let areaPreviewLayer = null;
 let trailLayer = null;
 let loadedAreaId = null;
 let loadedOrigin = false;
@@ -128,16 +124,22 @@ if (roverMap && window.L) {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(leafletMap);
   workAreaLayer = L.polygon([], { color: "#38d9cf", weight: 2, fillColor: "#38d9cf", fillOpacity: 0.13 }).addTo(leafletMap);
-  draftLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "5 5", fillColor: "#f2ba66", fillOpacity: 0.12 }).addTo(leafletMap);
-  offsetPreviewLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "4 4", fillColor: "#f2ba66", fillOpacity: 0.1 }).addTo(leafletMap);
+  areaPreviewLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "4 4", fillColor: "#f2ba66", fillOpacity: 0.1 }).addTo(leafletMap);
   trailLayer = L.polyline([], { color: "#a78bfa", weight: 3, opacity: 0.8 }).addTo(leafletMap);
   roverMarker = L.marker(mapOrigin, { icon: L.divIcon({ className: "rover-map-marker", html: "<span>▲</span>", iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(leafletMap);
   leafletMap.on("click", (event) => {
-    if (!mapDrawing || polygonDraft.length >= 128) return;
-    polygonDraft.push([event.latlng.lat, event.latlng.lng]);
-    draftLayer.setLatLngs(polygonDraft);
-    if (mapCoordinateText) mapCoordinateText.innerText = `${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
-    updateDrawHint();
+    const lat = event.latlng.lat;
+    const lon = event.latlng.lng;
+    if (mapCoordinateText) mapCoordinateText.innerText = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    if (pickAreaCentre) {
+      pickAreaCentre = false;
+      const pickBtn = document.getElementById("pickAreaBtn");
+      if (pickBtn) pickBtn.classList.remove("active");
+      setAreaCentre(lat, lon);
+      openModal("workAreaModal");
+      previewWorkArea();
+      showToast("Work area centre set");
+    }
   });
   leafletMap.on("mousemove", (event) => {
     if (mapCoordinateText) mapCoordinateText.innerText = `${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
@@ -290,19 +292,13 @@ async function connectWebRTC(reason) {
 // ----------------- Connection Badge & State -----------------
 
 function updateConnectionBadge(state, text) {
-  if (!wsStatusTxt) return;
-  if (state === "connected") {
-    wsStatusTxt.innerText = text || "ONLINE ⚡";
-    wsStatusTxt.className = "connected";
-    if (connectionDot) connectionDot.className = "status-dot online";
-  } else if (state === "connecting") {
-    wsStatusTxt.innerText = text || "CONNECTING 🔄";
-    wsStatusTxt.className = "connecting";
-    if (connectionDot) connectionDot.className = "status-dot";
-  } else {
-    wsStatusTxt.innerText = text || "OFFLINE ⚠️";
-    wsStatusTxt.className = "disconnected";
-    if (connectionDot) connectionDot.className = "status-dot";
+  if (wsStatusTxt) {
+    wsStatusTxt.innerText = text
+      || (state === "connected" ? "ONLINE" : state === "connecting" ? "CONNECTING" : "OFFLINE");
+    wsStatusTxt.className = `ws-state ${state}`;
+  }
+  if (connectionDot) {
+    connectionDot.className = state === "connected" ? "status-dot online" : "status-dot";
   }
 }
 
@@ -519,6 +515,7 @@ function renderTelemetry(data) {
   }
   if (data.gps) updateGpsReadout(data.gps);
   if (data.pose) renderRoverMap(data.pose, data.active_area);
+  if (data.active_area !== undefined) updateAreaSummary(data.active_area);
   if (leafletMap && !mapViewBootstrapped) {
     if (data.gps && data.gps.fix && data.gps.lat != null) {
       leafletMap.setView([data.gps.lat, data.gps.lon], 18);
@@ -703,49 +700,6 @@ function renderRoverMap(pose, area) {
   }
 }
 
-function toggleMapDrawing() {
-  mapDrawing = !mapDrawing;
-  const button = document.getElementById("drawAreaBtn");
-  const hint = document.getElementById("drawHint");
-  if (mapDrawing) {
-    centerMapOnRover();
-    if (!originSetForWork && !loadedOrigin) {
-      showToast("Set origin at rover first, then draw the boundary");
-    } else {
-      showToast("Tap map corners — drag to pan when not placing points");
-    }
-  }
-  if (button) button.classList.toggle("active", mapDrawing);
-  if (hint) {
-    hint.innerText = mapDrawing
-      ? "Tap boundary points · pan with drag"
-      : "Origin at rover centres the map · then draw boundary";
-  }
-  if (leafletMap) leafletMap.getContainer().classList.toggle("drawing", mapDrawing);
-}
-
-function updateDrawHint() {
-  const hint = document.getElementById("drawHint");
-  if (hint) hint.innerText = `${polygonDraft.length} points · need 3+ · drag map to pan`;
-  draftLayer.setLatLngs(polygonDraft);
-}
-
-function undoPolygonPoint() {
-  if (!polygonDraft.length) {
-    showToast("Nothing to undo");
-    return;
-  }
-  polygonDraft.pop();
-  updateDrawHint();
-  showToast("Removed last boundary point");
-}
-
-function clearPolygon() {
-  polygonDraft = [];
-  updateDrawHint();
-  showToast("Boundary draft cleared");
-}
-
 function setRoverStart() {
   if (!leafletMap) return;
   applyOriginAtRover("Work map centred on rover — local position reset to 0, 0 m");
@@ -762,119 +716,168 @@ function centerMapOnRover() {
   showToast("Map centred on rover");
 }
 
-function savePolygonArea() {
-  if (polygonDraft.length < 3) {
-    showToast("Add at least three boundary points");
-    return;
-  }
-  if (!originSetForWork) {
-    showToast("Tap “Origin here” at the rover before saving");
-    return;
-  }
-  showToast("Saving work area…");
-  const name = (areaNameInput && areaNameInput.value) || "Map work area";
-  const localPoints = polygonDraft.map((point) => geoToLocal(point));
-  fetch(`${baseURL}/api/areas/polygon`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, points: localPoints, map_points: polygonDraft, origin: mapOrigin }),
-  }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-    .then(({ ok, data }) => {
-      if (!ok) throw new Error(data.error || "Could not save boundary");
-      polygonDraft = [];
-      mapDrawing = false;
-      const button = document.getElementById("drawAreaBtn");
-      if (button) button.classList.remove("active");
-      window.activeWorkArea = data.area;
-      loadedAreaId = data.area.id;
-      workAreaLayer.setLatLngs(data.area.map_polygon || []);
-      draftLayer.setLatLngs([]);
-      if (lastPose) renderRoverMap(lastPose, data.area);
-      showToast(`Work area “${data.area.name || name}” saved`);
-    })
-    .catch((error) => showToast(error.message));
+// ----------------- Work area: coordinates + size -----------------
+// The mission sweeps one explicit area: a centre coordinate plus the ground it
+// covers east-west / north-south.  Nothing is planned until it is saved.
+
+const EARTH_M_PER_DEG = 111320;
+
+function areaNumber(id, fallback) {
+  const input = document.getElementById(id);
+  const value = input ? parseFloat(input.value) : NaN;
+  return Number.isFinite(value) ? value : fallback;
 }
 
-function readOffsetDistances() {
-  const read = (id) => {
-    const input = document.getElementById(id);
-    const value = input ? parseFloat(input.value) : 0;
-    if (!Number.isFinite(value)) return 0;
-    return Math.min(25, Math.max(0, value));
-  };
+function areaForm() {
   return {
-    forward: read("offsetForward"),
-    back: read("offsetBack"),
-    left: read("offsetLeft"),
-    right: read("offsetRight"),
+    lat: areaNumber("areaLat", NaN),
+    lon: areaNumber("areaLon", NaN),
+    width: Math.min(100, Math.max(0.5, areaNumber("areaWidth", 6))),
+    length: Math.min(100, Math.max(0.5, areaNumber("areaLength", 6))),
+    swath: Math.min(5, Math.max(0.1, areaNumber("areaSwath", 0.5))),
+    name: ((document.getElementById("areaNameInput") || {}).value || "Work area").trim() || "Work area",
   };
 }
 
-// Same rectangle the server builds: x runs forward, y to the left, rover at 0, 0.
-function offsetPolygonGeo() {
-  if (!lastPose || !offsetPreviewLayer) return [];
-  const distances = readOffsetDistances();
-  const heading = (lastPose.heading_deg || 0) * Math.PI / 180;
-  const cosH = Math.cos(heading);
-  const sinH = Math.sin(heading);
-  const corners = [
-    [-distances.back, -distances.right],
-    [distances.forward, -distances.right],
-    [distances.forward, distances.left],
-    [-distances.back, distances.left],
+function setAreaCentre(lat, lon) {
+  const latInput = document.getElementById("areaLat");
+  const lonInput = document.getElementById("areaLon");
+  if (latInput) latInput.value = lat.toFixed(6);
+  if (lonInput) lonInput.value = lon.toFixed(6);
+  if (leafletMap) leafletMap.setView([lat, lon], Math.max(leafletMap.getZoom(), 18));
+}
+
+// Same rectangle the server builds: centred on the coordinate, axis-aligned.
+function areaCornersGeo(form) {
+  if (!Number.isFinite(form.lat) || !Number.isFinite(form.lon)) return [];
+  const halfLat = (form.length / 2) / EARTH_M_PER_DEG;
+  const halfLon = (form.width / 2) / (EARTH_M_PER_DEG * Math.cos(form.lat * Math.PI / 180));
+  return [
+    [form.lat - halfLat, form.lon - halfLon],
+    [form.lat - halfLat, form.lon + halfLon],
+    [form.lat + halfLat, form.lon + halfLon],
+    [form.lat + halfLat, form.lon - halfLon],
   ];
-  return corners.map(([x, y]) => localToGeo(
-    lastPose.x_m + x * cosH - y * sinH,
-    lastPose.y_m + x * sinH + y * cosH,
-  ));
 }
 
-function previewOffsetArea() {
-  if (!offsetPreviewLayer) return;
-  const points = offsetPolygonGeo();
-  offsetPreviewLayer.setLatLngs(points.length >= 3 ? points : []);
+// Mirrors helpers/auto_plan.plan_rows: rows every swath*0.9 from the near edge,
+// plus a last pass when the spacing would leave the far edge dry.
+function planPassCount(form) {
+  const spacing = form.swath * 0.9;            // 10% overlap, as the planner does
+  const across = Math.min(form.width, form.length);
+  let rows = Math.floor(across / spacing + 1e-9) + 1;
+  if ((rows - 1) * spacing < across - form.swath / 2) rows += 1;
+  return Math.max(1, rows);
 }
 
-function openOffsetArea() {
+function previewWorkArea() {
+  const form = areaForm();
+  const corners = areaCornersGeo(form);
+  if (areaPreviewLayer) areaPreviewLayer.setLatLngs(corners.length === 4 ? corners : []);
+  const note = document.getElementById("areaPlanNote");
+  if (!note) return;
+  if (!corners.length) {
+    note.innerText = "Set the centre coordinates to preview the sweep.";
+    return;
+  }
+  const passes = planPassCount(form);
+  const distance = passes * Math.max(form.width, form.length);
+  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m at ${form.swath.toFixed(2)} m per pass → ${passes} passes, about ${distance.toFixed(0)} m of driving.`;
+}
+
+function updateAreaSummary(area) {
+  if (!areaSummary) return;
+  if (!area) {
+    areaSummary.innerText = "No work area set — open Work area…";
+    return;
+  }
+  const size = Number.isFinite(area.width_m) && Number.isFinite(area.height_m)
+    ? ` · ${area.width_m.toFixed(1)} × ${area.height_m.toFixed(1)} m`
+    : "";
+  areaSummary.innerText = `${area.name || "Work area"}${size}`;
+}
+
+function openWorkArea() {
+  const area = window.activeWorkArea;
+  if (area && Number.isFinite(area.center_lat) && Number.isFinite(area.center_lon)) {
+    setAreaCentre(area.center_lat, area.center_lon);
+    const widthInput = document.getElementById("areaWidth");
+    const lengthInput = document.getElementById("areaLength");
+    const swathInput = document.getElementById("areaSwath");
+    const nameInput = document.getElementById("areaNameInput");
+    if (widthInput && Number.isFinite(area.width_m)) widthInput.value = area.width_m;
+    if (lengthInput && Number.isFinite(area.height_m)) lengthInput.value = area.height_m;
+    if (swathInput && Number.isFinite(area.swath_m)) swathInput.value = area.swath_m;
+    if (nameInput && area.name) nameInput.value = area.name;
+  } else {
+    const rover = getRoverGeoPosition();
+    if (rover) setAreaCentre(rover[0], rover[1]);
+  }
+  openModal("workAreaModal");
+  previewWorkArea();
+}
+
+function closeWorkArea() {
+  pickAreaCentre = false;
+  const pickBtn = document.getElementById("pickAreaBtn");
+  if (pickBtn) pickBtn.classList.remove("active");
+  if (areaPreviewLayer) areaPreviewLayer.setLatLngs([]);
+  closeModal("workAreaModal");
+}
+
+function useRoverPosition() {
+  const rover = getRoverGeoPosition();
+  if (!rover) {
+    showToast("Rover position not available yet");
+    return;
+  }
+  setAreaCentre(rover[0], rover[1]);
+  previewWorkArea();
+}
+
+function pickAreaOnMap() {
+  if (!leafletMap) return;
+  pickAreaCentre = true;
+  const pickBtn = document.getElementById("pickAreaBtn");
+  if (pickBtn) pickBtn.classList.add("active");
+  closeModal("workAreaModal");
+  showToast("Tap the work area centre on the map");
+}
+
+function saveWorkArea() {
+  const form = areaForm();
+  if (!Number.isFinite(form.lat) || !Number.isFinite(form.lon)) {
+    showToast("Pick the centre on the map or type its coordinates");
+    return;
+  }
   if (!originSetForWork && !loadedOrigin) {
-    showToast("Tap “Origin here” at the rover before sizing the area");
-    return;
-  }
-  if (!lastPose) {
-    showToast("Waiting for the rover's position");
-    return;
-  }
-  openModal("offsetAreaModal");
-  previewOffsetArea();
-}
-
-function closeOffsetArea() {
-  if (offsetPreviewLayer) offsetPreviewLayer.setLatLngs([]);
-  closeModal("offsetAreaModal");
-}
-
-function saveOffsetArea() {
-  const distances = readOffsetDistances();
-  if (distances.forward + distances.back < 0.5 || distances.left + distances.right < 0.5) {
-    showToast("Forward + back and left + right must each reach 0.5 m");
+    showToast("Tap “Origin here” at the rover first");
     return;
   }
   showToast("Saving work area…");
-  const name = (areaNameInput && areaNameInput.value) || "Distance work area";
-  fetch(`${baseURL}/api/areas/offsets`, {
+  fetch(`${baseURL}/api/areas/rect`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...distances, name, origin: mapOrigin }),
+    body: JSON.stringify({
+      name: form.name,
+      center: [form.lat, form.lon],
+      width_m: form.width,
+      height_m: form.length,
+      swath_m: form.swath,
+      origin: mapOrigin,
+    }),
   }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
     .then(({ ok, data }) => {
       if (!ok) throw new Error(data.error || "Could not set the work area");
-      closeOffsetArea();
       window.activeWorkArea = data.area;
       loadedAreaId = data.area.id;
       workAreaLayer.setLatLngs(data.area.map_polygon || []);
-      if (lastPose) renderRoverMap(lastPose, data.area);
-      const size = data.size ? ` · ${data.size.along_m} × ${data.size.across_m} m` : "";
-      showToast(`Work area “${data.area.name || name}” saved${size}`);
+      if (Array.isArray(data.area.map_polygon) && data.area.map_polygon.length >= 3) {
+        leafletMap.fitBounds(workAreaLayer.getBounds(), { padding: [24, 24], maxZoom: 18 });
+      }
+      closeWorkArea();
+      updateAreaSummary(data.area);
+      showToast(`Work area “${data.area.name}” set · ${form.width} × ${form.length} m`);
     })
     .catch((error) => showToast(error.message));
 }
@@ -882,8 +885,16 @@ function saveOffsetArea() {
 function updateAutoProgressUI(prog) {
   if (autoProgressText) {
     let text = "Idle";
-    if (prog.phase !== "idle") {
-      text = `${prog.phase.toUpperCase()} | Strip ${prog.strip}/${prog.total_strips} | ${prog.coverage_pct}%`;
+    if (prog.status === "fault") {
+      text = `Fault · ${prog.fault || prog.message || "mission stopped"}`;
+    } else if (prog.phase && prog.phase !== "idle") {
+      const bits = [String(prog.phase).toUpperCase()];
+      if (prog.total_strips) bits.push(`${prog.strip}/${prog.total_strips}`);
+      bits.push(`${Math.round(prog.coverage_pct || 0)}%`);
+      if (Array.isArray(prog.incomplete_strips) && prog.incomplete_strips.length) {
+        bits.push(`skipped ${prog.incomplete_strips.length}`);
+      }
+      text = bits.join(" · ");
     }
     autoProgressText.innerText = text.toUpperCase();
   }
@@ -922,6 +933,7 @@ function updatePumpUI(isActive) {
 }
 
 function updateAutoUI(isAutoActive) {
+  roverAutoActive = Boolean(isAutoActive);
   const autoStatus = document.getElementById("autoStatus");
   const autoBtn = document.getElementById("autoModeBtn");
   if (autoStatus && autoBtn) {
@@ -935,7 +947,6 @@ function updateAutoUI(isAutoActive) {
       if (modeTxt) modeTxt.innerText = "MANUAL 🎮";
     }
   }
-  if (missionActionLabel) missionActionLabel.innerText = isAutoActive ? "Stop autonomous mission" : "Start autonomous mission";
 }
 
 // ----------------- Command Handlers (WS with HTTP Fallback) -----------------
@@ -985,6 +996,12 @@ function toggleWaterPump(action = "toggle") {
 }
 
 function toggleAutoMode(action = "toggle") {
+  const willStart = action === "start" || (action !== "stop" && !roverAutoActive);
+  if (willStart && !window.activeWorkArea) {
+    showToast("Choose the work area centre and size first");
+    openWorkArea();
+    return;
+  }
   const sent = sendWSCommand({ type: "auto_mode", action: action });
   if (!sent) {
     roverFetch(`${baseURL}/auto_mode?action=${action}`)
@@ -1044,12 +1061,6 @@ if (slider) {
   };
 }
 
-function toggleSidebar(open) {
-  if (sidebar) sidebar.classList.toggle("open", open);
-  if (mobileBackdrop) mobileBackdrop.classList.toggle("open", open);
-  if (open && leafletMap) setTimeout(() => leafletMap.invalidateSize(), 280);
-}
-
 function openModal(id) {
   const modal = document.getElementById(id);
   if (modal) modal.classList.add("open");
@@ -1078,10 +1089,6 @@ function calibrateIMU() {
     })
     .catch(() => showToast("Unable to reach the rover"));
 }
-
-setInterval(() => {
-  if (sidebarClock) sidebarClock.innerText = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}, 1000);
 
 function setupButton(buttonElement, directionName) {
   if (!buttonElement) return;

@@ -67,13 +67,13 @@ class NavigationDatabase:
     # ── work areas ─────────────────────────────────────────────────────
 
     @staticmethod
-    def _new_area(area_id, name, points, map_points, origin):
+    def _new_area(area_id, name, points, map_points, origin, extra=None):
         clean = [[float(p[0]), float(p[1])] for p in points]
         min_x = min(p[0] for p in clean)
         max_x = max(p[0] for p in clean)
         min_y = min(p[1] for p in clean)
         max_y = max(p[1] for p in clean)
-        return {
+        area = {
             "id": area_id,
             "name": str(name or "Work area"),
             "min_x": min_x,
@@ -87,6 +87,8 @@ class NavigationDatabase:
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "active": 1,
         }
+        area.update(extra or {})
+        return area
 
     def _insert_locked(self, area):
         for other in self._data["areas"]:
@@ -107,6 +109,7 @@ class NavigationDatabase:
             return self._insert_locked(self._new_area(0, name, rectangle, None, None))
 
     def save_polygon_area(self, name, points, map_points=None, origin=None):
+        # Kept for areas stored before the coordinate-based work area existed.
         """Save local metre points and optional geographic map coordinates."""
         clean = []
         for point in points:
@@ -125,6 +128,36 @@ class NavigationDatabase:
             raise ValueError("Map points must match boundary points")
         with self.lock:
             return self._insert_locked(self._new_area(0, name, clean, map_points, origin))
+
+    def save_rect_area(self, name, center, width_m, height_m, swath_m,
+                       points, map_points, origin):
+        """Work area defined by a centre coordinate and two side lengths.
+
+        `points` are the local metre corners and `map_points` their lat/lon;
+        the rectangle itself is kept so the dashboard can reopen the exact
+        values the user typed, even after the map origin moves.
+        """
+        clean = [[float(point[0]), float(point[1])] for point in points]
+        if len(clean) < 3:
+            raise ValueError("The work area needs four corners")
+        width_m = float(width_m)
+        height_m = float(height_m)
+        if not (0.5 <= width_m <= 100.0 and 0.5 <= height_m <= 100.0):
+            raise ValueError("Work area sides must be 0.5-100 m")
+        if not isinstance(center, (list, tuple)) or len(center) != 2:
+            raise ValueError("Work area centre must be a latitude/longitude pair")
+        extra = {
+            "kind": "rect",
+            "center_lat": float(center[0]),
+            "center_lon": float(center[1]),
+            "width_m": width_m,
+            "height_m": height_m,
+            "swath_m": float(swath_m) if swath_m else None,
+        }
+        with self.lock:
+            return self._insert_locked(
+                self._new_area(0, name, clean, map_points, origin, extra)
+            )
 
     def get_area(self, area_id):
         with self.lock:

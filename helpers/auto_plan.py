@@ -90,6 +90,25 @@ def offsets_polygon(forward, back, left, right):
     return [[-rear, -starboard], [front, -starboard], [front, port], [-rear, port]]
 
 
+def rectangle_world_polygon(center_x, center_y, width_m, height_m):
+    """Axis-aligned rectangle around a centre point, in world metres.
+
+    This is the work area a dashboard user defines by picking a coordinate and
+    typing the two side lengths: x runs east, y north, so `width_m` is the
+    east-west side and `height_m` the north-south one.
+    """
+    width = max(MIN_AREA_M, float(width_m))
+    height = max(MIN_AREA_M, float(height_m))
+    half_w = width / 2.0
+    half_h = height / 2.0
+    return [
+        [float(center_x) - half_w, float(center_y) - half_h],
+        [float(center_x) + half_w, float(center_y) - half_h],
+        [float(center_x) + half_w, float(center_y) + half_h],
+        [float(center_x) - half_w, float(center_y) + half_h],
+    ]
+
+
 def offsets_world_polygon(forward, back, left, right, origin_x, origin_y, heading_rad):
     """Offsets rectangle placed on the ground at the rover's pose."""
     polygon = offsets_polygon(forward, back, left, right)
@@ -145,7 +164,10 @@ def plan_rows(polygon, swath_m=DEFAULT_SWATH_M, overlap=DEFAULT_OVERLAP,
     rows = []
     y = 0.0
     while y <= height + 1e-9:
-        spans = _line_spans(polygon, min(y, probe_limit), min_span_m)
+        # Probe a hair inside the area: a rectangle rotated into the sweep
+        # frame leaves the first row a few 1e-16 outside the polygon, which
+        # used to drop the near-edge pass entirely.
+        spans = _line_spans(polygon, min(y + 1e-6, probe_limit), min_span_m)
         if spans:
             rows.append((y, spans))
         y += spacing
@@ -386,6 +408,7 @@ __all__ = [
     "MIN_SPAN_M",
     "MIN_AREA_M",
     "MIN_DUTY",
+    "rectangle_world_polygon",
     "offsets_polygon",
     "offsets_world_polygon",
     "to_world_point",

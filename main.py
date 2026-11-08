@@ -21,7 +21,8 @@ from helpers import (
     enable_ultrasonic, disable_ultrasonic, toggle_ultrasonic, is_ultrasonic_enabled,
     start_auto_mode, stop_auto_mode, toggle_auto_mode, is_auto_active,
     get_auto_progress, set_auto_speed,
-    set_area_polygon, set_pose_provider,
+    set_work_area, has_work_area, get_work_area as current_work_area,
+    set_pose_provider,
     get_encoder_ticks, encoder_config
 )
 from helpers.mpu6050 import (
@@ -32,7 +33,7 @@ from helpers.hmc5883l import (
     get_compass_snapshot, update_compass, compass_drift_correction, reset_compass_fusion,
 )
 from helpers.pose_fusion import course_to_heading_rad, gps_heading_usable, geo_to_local, local_to_geo
-from helpers.auto_plan import offsets_world_polygon
+from helpers.auto_plan import rectangle_world_polygon
 from helpers import motor_controls
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
@@ -92,33 +93,33 @@ if saved_map_origin:
 
 
 def _apply_saved_area(area, origin):
-    """Load a saved work area into the mission's current frame.
+    """Load a saved work area into the mission's current local frame.
 
-    A work area is drawn in lat/lon and stored twice: geographic points for
-    the map, local metres for the mission.  Local metres are only valid for
-    the map origin they were drawn against, so when the rover's map start has
-    moved since, the polygon is re-derived from its geographic points.
+    An area is stored as a coordinate plus two side lengths, with its lat/lon
+    corners for the map.  Local metres are only valid for the map origin they
+    were saved against, so the frame is always re-derived from the geographic
+    corners and the origin in force now.
     """
-    if not area:
+    if not area or not origin:
         return False
-    polygon = area.get("polygon") or []
-    map_polygon = area.get("map_polygon") or []
-    area_origin = (area.get("origin_lat"), area.get("origin_lon"))
-    moved = (
-        origin and len(map_polygon) == len(polygon) and len(map_polygon) >= 3
-        and area_origin[0] is not None and area_origin[1] is not None
-        and (abs(origin[0] - area_origin[0]) > 1e-9
-             or abs(origin[1] - area_origin[1]) > 1e-9)
-    )
-    if moved:
-        polygon = [
-            list(geo_to_local(float(point[0]), float(point[1]), origin[0], origin[1]))
-            for point in map_polygon
-        ]
-    if len(polygon) < 3:
+    map_points = area.get("map_polygon") or []
+    if len(map_points) < 3:
         return False
     try:
-        return set_area_polygon(polygon)
+        local = [
+            geo_to_local(float(point[0]), float(point[1]),
+                         float(origin[0]), float(origin[1]))
+            for point in map_points
+        ]
+        xs = [point[0] for point in local]
+        ys = [point[1] for point in local]
+        return set_work_area(
+            (min(xs) + max(xs)) / 2.0,
+            (min(ys) + max(ys)) / 2.0,
+            max(xs) - min(xs),
+            max(ys) - min(ys),
+            area.get("swath_m"),
+        )
     except (TypeError, ValueError):
         return False
 
@@ -253,6 +254,12 @@ def handle_water_pump(action=None):
     }
 
 def handle_auto_mode(action=None):
+    if action in ("start", "toggle", None) and not is_auto_active() and not has_work_area():
+        return {
+            "success": False,
+            "auto_active": False,
+            "error": "Set the work area centre and size on the map first",
+        }
     if action == "start":
         active = start_auto_mode()
     elif action == "stop":
@@ -311,6 +318,7 @@ def get_telemetry_payload():
     payload["ultrasonic_enabled"] = is_ultrasonic_enabled()
     payload["auto_active"] = is_auto_active()
     payload["auto_progress"] = get_auto_progress()
+    payload["work_area"] = current_work_area()
     payload["motor_status"] = motor_status
     payload["camera_angle"] = camera_current_angle
     lt, rt = get_encoder_ticks()
@@ -574,7 +582,7 @@ def ws_handler(ws):
                 if cmd_type in _PROTECTED_WS_COMMANDS and not _pin_ok(data.get("pin")):
                     response["success"] = False
                     response["error"] = "PIN required"
-                    response["message"] = "PIN required — set it in the sidebar"
+                    response["message"] = "PIN required — enter it in the header"
                     client.send(json.dumps(response))
                     continue
 
@@ -725,79 +733,60 @@ def list_work_areas():
     return jsonify({"success": True, "areas": DB.list_areas()}), 200
 
 
-@app.route('/api/areas/polygon', methods=['POST'])
-def save_polygon_work_area():
+@app.route('/api/areas/rect', methods=['POST'])
+def save_rect_work_area():
+    """Work area: a coordinate plus the two side lengths, in metres.
+
+    The dashboard sends the chosen centre and the sides the user typed; the
+    server derives the local rectangle (what the mission drives) and the
+    lat/lon corners (what the map draws) from that one definition.
+    """
     if is_auto_active():
         return jsonify({"success": False, "error": "Stop autonomous mode before changing the work area"}), 409
     payload = request.get_json(silent=True) or {}
     try:
-        points = payload.get("points", [])
-        map_points = payload.get("map_points", [])
-        origin = payload.get("origin")
-        if len(points) < 3 or len(points) > 128 or len(map_points) != len(points):
-            raise ValueError("Provide 3 to 128 matching map boundary points")
-        if any(len(point) != 2 or not all(math.isfinite(float(value)) for value in point) for point in points):
-            raise ValueError("Boundary coordinates must be finite x/y values")
-        if any(len(point) != 2 or not (-85 <= float(point[0]) <= 85 and -180 <= float(point[1]) <= 180) for point in map_points):
-            raise ValueError("Boundary points must be valid latitude/longitude coordinates")
-        if not isinstance(origin, (list, tuple)) or len(origin) != 2:
-            raise ValueError("Set the rover start on the map before saving the boundary")
-        if not (-85 <= float(origin[0]) <= 85 and -180 <= float(origin[1]) <= 180):
-            raise ValueError("Rover start must be a valid latitude/longitude coordinate")
-        area = DB.save_polygon_area(payload.get("name", "Work area"), points, map_points, origin)
-        if origin and len(origin) == 2:
-            _map_origin_cache["value"] = DB.save_map_origin(origin[0], origin[1])
-        set_area_polygon(points)
-        _area_cache["ts"] = 0.0
-        return jsonify({"success": True, "area": area, "coverage_mode": "polygon"}), 201
-    except (TypeError, ValueError, KeyError, IndexError) as exc:
-        return jsonify({"success": False, "error": str(exc)}), 400
+        center = payload.get("center")
+        if not isinstance(center, (list, tuple)) or len(center) != 2:
+            raise ValueError("Pick the work area centre on the map")
+        latitude = float(center[0])
+        longitude = float(center[1])
+        if not (-85 <= latitude <= 85 and -180 <= longitude <= 180):
+            raise ValueError("Centre must be a valid latitude/longitude")
 
+        width = float(payload.get("width_m", 0))
+        height = float(payload.get("height_m", 0))
+        if not (0.5 <= width <= 100.0 and 0.5 <= height <= 100.0):
+            raise ValueError("Area sides must be between 0.5 and 100 m")
 
-@app.route('/api/areas/offsets', methods=['POST'])
-def save_offset_work_area():
-    """Work area sized from the rover: forward/back/left/right metres."""
-    if is_auto_active():
-        return jsonify({"success": False, "error": "Stop autonomous mode before changing the work area"}), 409
-    payload = request.get_json(silent=True) or {}
-    try:
-        distances = {}
-        for key in ("forward", "back", "left", "right"):
-            raw = payload.get(key, 0)
-            value = 0.0 if raw is None or raw == "" else float(raw)
-            if not math.isfinite(value) or not 0.0 <= value <= 25.0:
-                raise ValueError("Each distance must be between 0 and 25 m")
-            distances[key] = value
+        raw_swath = payload.get("swath_m")
+        swath = None if raw_swath in (None, "") else float(raw_swath)
+        if swath is not None and not 0.1 <= swath <= 5.0:
+            raise ValueError("Pass width must be between 0.1 and 5 m")
 
         origin = payload.get("origin") or _map_origin_cache["value"]
         if not isinstance(origin, (list, tuple)) or len(origin) != 2:
-            raise ValueError("Set the rover start on the map before sizing the area")
-        if not (-85 <= float(origin[0]) <= 85 and -180 <= float(origin[1]) <= 180):
-            raise ValueError("Rover start must be a valid latitude/longitude coordinate")
+            raise ValueError("Tap “Origin here” at the rover before setting the area")
+        origin = [float(origin[0]), float(origin[1])]
+        if not (-85 <= origin[0] <= 85 and -180 <= origin[1] <= 180):
+            raise ValueError("Rover start must be a valid latitude/longitude")
 
-        # Place the box where the rover is standing right now, so what the user
-        # measured around the rover is what the mission drives.
-        pose = pose_tracker.snapshot()
-        polygon = offsets_world_polygon(
-            distances["forward"], distances["back"], distances["left"], distances["right"],
-            pose["x_m"], pose["y_m"], math.radians(pose.get("heading_deg", 0.0)),
-        )
+        center_x, center_y = geo_to_local(latitude, longitude, origin[0], origin[1])
+        polygon = rectangle_world_polygon(center_x, center_y, width, height)
         map_points = [
-            list(local_to_geo(x, y, float(origin[0]), float(origin[1])))
-            for x, y in polygon
+            list(local_to_geo(x, y, origin[0], origin[1])) for x, y in polygon
         ]
-        area = DB.save_polygon_area(payload.get("name", "Work area"), polygon, map_points, origin)
+        if not set_work_area(center_x, center_y, width, height, swath):
+            raise ValueError("Those area values were rejected by the mission")
+        area = DB.save_rect_area(
+            payload.get("name", "Work area"), [latitude, longitude],
+            width, height, swath, polygon, map_points, origin,
+        )
         _map_origin_cache["value"] = DB.save_map_origin(origin[0], origin[1])
-        set_area_polygon(polygon)
         _area_cache["ts"] = 0.0
         return jsonify({
             "success": True,
             "area": area,
-            "coverage_mode": "offsets",
-            "size": {
-                "along_m": round(distances["forward"] + distances["back"], 2),
-                "across_m": round(distances["left"] + distances["right"], 2),
-            },
+            "size": {"width_m": width, "height_m": height},
         }), 201
     except (TypeError, ValueError, KeyError, IndexError) as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
@@ -838,7 +827,7 @@ def set_navigation_origin_from_gps():
 
 
 @app.route('/api/areas/<int:area_id>', methods=['GET'])
-def get_work_area(area_id):
+def get_area_detail(area_id):
     area = DB.get_area(area_id)
     if not area:
         return jsonify({"success": False, "error": "Area not found"}), 404

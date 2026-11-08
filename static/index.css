@@ -93,3 +93,15 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 .video-off{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;background:#080c12;color:#8a96a6;font:11px 'DM Mono',monospace;letter-spacing:.14em;text-transform:uppercase}
 .video-off[hidden]{display:none}
 .video-off small{color:#5d6a7a;font:9px Manrope,system-ui,sans-serif;letter-spacing:.06em}
+
+/* ── Console shell: the sidebar is gone, the dashboard owns the window ── */
+.sidebar,.mobile-backdrop,.mobile-menu{display:none!important}
+.app-content{margin-left:0!important;width:100%!important;min-width:0}
+.ws-state{font:9px 'DM Mono',monospace;letter-spacing:.12em;color:var(--muted);white-space:nowrap}
+.ws-state.connected{color:var(--green)}
+.ws-state.connecting{color:var(--amber)}
+.ws-state.disconnected{color:var(--danger)}
+.topbar .pin-input{width:92px;margin:0;padding:6px 8px;font-size:10px;letter-spacing:.14em}
+.modal-tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.modal-tools .map-btn.active{border-color:var(--cyan);color:var(--cyan);background:rgba(57,217,208,.08)}
+.modal .calibration-note{margin-top:12px}
