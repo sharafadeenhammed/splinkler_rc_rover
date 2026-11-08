@@ -471,13 +471,13 @@ def ws_telemetry_broadcast_loop():
     print("🛰️ WS Telemetry broadcast thread started.")
     while True:
         try:
-            time.sleep(1.0)
+            time.sleep(0.2)
             with clients_lock:
                 if not connected_clients:
                     continue
             broadcast_telemetry()
         except Exception as e:
-            time.sleep(1.0)
+            time.sleep(0.2)
 
 # Background loops start exactly once, at module import — covering both
 # `python main.py` and a WSGI server (gunicorn imports main:app without ever
