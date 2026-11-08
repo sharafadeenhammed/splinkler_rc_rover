@@ -371,7 +371,7 @@ function initWebSocket() {
   };
 
   ws.onclose = (event) => {
-    console.warn(`🔌 [WS] Disconnected (code: ${event.code}). Server stopped rover actions.`);
+    console.warn(`🔌 [WS] Disconnected (code: ${event.code}). Manual drive stopped; an autonomous mission keeps running.`);
     handleDisconnect();
   };
 }

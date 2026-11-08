@@ -630,8 +630,16 @@ def ws_handler(ws):
             remaining = len(connected_clients)
         print(f"🔌 WebSocket client disconnected. Remaining: {remaining}")
 
-        # Stop all rover actions immediately on user disconnect
-        emergency_stop_rover("user disconnected from WebSocket")
+        # Manual driving must stop the moment its dashboard goes away, but an
+        # autonomous mission plans and drives its own sweep: cancelling it here
+        # killed the run mid-strip whenever a socket closed for a reason that
+        # had nothing to do with the mission (phone screen locked, radio stall,
+        # second tab or page reload), leaving it looking as if it never started.
+        if is_auto_active():
+            print("🤖 Dashboard disconnected; the autonomous mission keeps running")
+        else:
+            # Stop all rover actions immediately on user disconnect
+            emergency_stop_rover("user disconnected from WebSocket")
 
         # Broadcast stopped telemetry to any remaining clients
         if remaining > 0:
