@@ -98,13 +98,27 @@ def _apply_saved_area(area, origin):
     An area is stored as a coordinate plus two side lengths, with its lat/lon
     corners for the map.  Local metres are only valid for the map origin they
     were saved against, so the frame is always re-derived from the geographic
-    corners and the origin in force now.
+    corners and the origin in force now.  A size-only area means "this much
+    ground around the rover", so it is simply re-anchored where the rover is.
     """
-    if not area or not origin:
+    if not area:
         return False
     map_points = area.get("map_polygon") or []
-    if len(map_points) < 3:
-        return False
+    if len(map_points) < 3 or not origin:
+        # Size-only area: it means "this much ground around the rover", so it is
+        # re-anchored where the rover stands now (the pose is 0, 0 at boot and
+        # right after a new origin is picked, which is the same thing).
+        try:
+            width = float(area.get("width_m"))
+            height = float(area.get("height_m"))
+        except (TypeError, ValueError):
+            return False
+        snap = pose_tracker.snapshot()
+        return set_work_area(
+            float(snap.get("x_m") or 0.0),
+            float(snap.get("y_m") or 0.0),
+            width, height, area.get("swath_m"),
+        )
     try:
         local = [
             geo_to_local(float(point[0]), float(point[1]),
@@ -657,6 +671,13 @@ def ws_handler(ws):
 
 @app.route("/")
 def home():
+    # Opening the console always starts in MANUAL.  A mission left running from
+    # an earlier session (or an earlier page) must never pick the rover up and
+    # drive on its own the moment the dashboard reloads.
+    if is_auto_active():
+        print("🖐️ Dashboard opened — stopping the running mission, manual mode by default")
+        emergency_stop_rover("dashboard opened")
+        broadcast_telemetry()
     return render_template("index.html")
 
 @app.route('/motor', methods=['GET'])
@@ -745,14 +766,6 @@ def save_rect_work_area():
         return jsonify({"success": False, "error": "Stop autonomous mode before changing the work area"}), 409
     payload = request.get_json(silent=True) or {}
     try:
-        center = payload.get("center")
-        if not isinstance(center, (list, tuple)) or len(center) != 2:
-            raise ValueError("Pick the work area centre on the map")
-        latitude = float(center[0])
-        longitude = float(center[1])
-        if not (-85 <= latitude <= 85 and -180 <= longitude <= 180):
-            raise ValueError("Centre must be a valid latitude/longitude")
-
         width = float(payload.get("width_m", 0))
         height = float(payload.get("height_m", 0))
         if not (0.5 <= width <= 100.0 and 0.5 <= height <= 100.0):
@@ -764,24 +777,53 @@ def save_rect_work_area():
             raise ValueError("Pass width must be between 0.1 and 5 m")
 
         origin = payload.get("origin") or _map_origin_cache["value"]
-        if not isinstance(origin, (list, tuple)) or len(origin) != 2:
-            raise ValueError("Tap “Origin here” at the rover before setting the area")
-        origin = [float(origin[0]), float(origin[1])]
-        if not (-85 <= origin[0] <= 85 and -180 <= origin[1] <= 180):
-            raise ValueError("Rover start must be a valid latitude/longitude")
+        center = payload.get("center")
+        if center is not None:
+            # Coordinate path (kept for later; the dashboard no longer sends it).
+            if not isinstance(center, (list, tuple)) or len(center) != 2:
+                raise ValueError("Pick the work area centre on the map")
+            latitude = float(center[0])
+            longitude = float(center[1])
+            if not (-85 <= latitude <= 85 and -180 <= longitude <= 180):
+                raise ValueError("Centre must be a valid latitude/longitude")
+            if not isinstance(origin, (list, tuple)) or len(origin) != 2:
+                raise ValueError("Tap “Origin here” at the rover before setting the area")
+            origin = [float(origin[0]), float(origin[1])]
+            if not (-85 <= origin[0] <= 85 and -180 <= origin[1] <= 180):
+                raise ValueError("Rover start must be a valid latitude/longitude")
+            center_x, center_y = geo_to_local(latitude, longitude, origin[0], origin[1])
+        else:
+            # Size-only path: the operator types how much ground to work and the
+            # rectangle is centred on the rover where it stands right now, so no
+            # coordinates, GPS fix or map origin are needed to start a sweep.
+            snap = pose_tracker.snapshot()
+            center_x = float(snap.get("x_m") or 0.0)
+            center_y = float(snap.get("y_m") or 0.0)
+            latitude = longitude = None
+            if isinstance(origin, (list, tuple)) and len(origin) == 2:
+                origin = [float(origin[0]), float(origin[1])]
+                if -85 <= origin[0] <= 85 and -180 <= origin[1] <= 180:
+                    latitude, longitude = local_to_geo(center_x, center_y, origin[0], origin[1])
+                else:
+                    origin = None
+            else:
+                origin = None
 
-        center_x, center_y = geo_to_local(latitude, longitude, origin[0], origin[1])
         polygon = rectangle_world_polygon(center_x, center_y, width, height)
-        map_points = [
-            list(local_to_geo(x, y, origin[0], origin[1])) for x, y in polygon
-        ]
+        map_points = []
+        if origin:
+            map_points = [
+                list(local_to_geo(x, y, origin[0], origin[1])) for x, y in polygon
+            ]
         if not set_work_area(center_x, center_y, width, height, swath):
             raise ValueError("Those area values were rejected by the mission")
         area = DB.save_rect_area(
-            payload.get("name", "Work area"), [latitude, longitude],
+            payload.get("name", "Work area"),
+            [latitude, longitude] if latitude is not None else None,
             width, height, swath, polygon, map_points, origin,
         )
-        _map_origin_cache["value"] = DB.save_map_origin(origin[0], origin[1])
+        if center is not None and origin:
+            _map_origin_cache["value"] = DB.save_map_origin(origin[0], origin[1])
         _area_cache["ts"] = 0.0
         return jsonify({
             "success": True,

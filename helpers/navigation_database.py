@@ -144,12 +144,13 @@ class NavigationDatabase:
         height_m = float(height_m)
         if not (0.5 <= width_m <= 100.0 and 0.5 <= height_m <= 100.0):
             raise ValueError("Work area sides must be 0.5-100 m")
-        if not isinstance(center, (list, tuple)) or len(center) != 2:
+        if center is not None and (not isinstance(center, (list, tuple)) or len(center) != 2):
             raise ValueError("Work area centre must be a latitude/longitude pair")
         extra = {
             "kind": "rect",
-            "center_lat": float(center[0]),
-            "center_lon": float(center[1]),
+            # None for a size-only area: it is centred on the rover at run time.
+            "center_lat": float(center[0]) if center else None,
+            "center_lon": float(center[1]) if center else None,
             "width_m": width_m,
             "height_m": height_m,
             "swath_m": float(swath_m) if swath_m else None,

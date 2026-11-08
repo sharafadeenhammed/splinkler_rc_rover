@@ -90,7 +90,6 @@ function roverFetch(url, opts = {}) {
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
-let pickAreaCentre = false; // next map tap chooses the work area centre
 let roverAutoActive = false;
 const mapOriginDefault = [6.5244, 3.3792];
 let mapOrigin = mapOriginDefault.slice();
@@ -131,15 +130,6 @@ if (roverMap && window.L) {
     const lat = event.latlng.lat;
     const lon = event.latlng.lng;
     if (mapCoordinateText) mapCoordinateText.innerText = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-    if (pickAreaCentre) {
-      pickAreaCentre = false;
-      const pickBtn = document.getElementById("pickAreaBtn");
-      if (pickBtn) pickBtn.classList.remove("active");
-      setAreaCentre(lat, lon);
-      openModal("workAreaModal");
-      previewWorkArea();
-      showToast("Work area centre set");
-    }
   });
   leafletMap.on("mousemove", (event) => {
     if (mapCoordinateText) mapCoordinateText.innerText = `${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
@@ -716,11 +706,10 @@ function centerMapOnRover() {
   showToast("Map centred on rover");
 }
 
-// ----------------- Work area: coordinates + size -----------------
-// The mission sweeps one explicit area: a centre coordinate plus the ground it
-// covers east-west / north-south.  Nothing is planned until it is saved.
-
-const EARTH_M_PER_DEG = 111320;
+// ----------------- Work area: size only -----------------
+// The mission sweeps one explicit area, defined by how much ground it covers
+// east-west (breadth) and north-south (length).  It is centred on the rover
+// where it stands when the area is set, so no coordinates are needed.
 
 function areaNumber(id, fallback) {
   const input = document.getElementById(id);
@@ -730,8 +719,6 @@ function areaNumber(id, fallback) {
 
 function areaForm() {
   return {
-    lat: areaNumber("areaLat", NaN),
-    lon: areaNumber("areaLon", NaN),
     width: Math.min(100, Math.max(0.5, areaNumber("areaWidth", 6))),
     length: Math.min(100, Math.max(0.5, areaNumber("areaLength", 6))),
     swath: Math.min(5, Math.max(0.1, areaNumber("areaSwath", 0.5))),
@@ -739,24 +726,16 @@ function areaForm() {
   };
 }
 
-function setAreaCentre(lat, lon) {
-  const latInput = document.getElementById("areaLat");
-  const lonInput = document.getElementById("areaLon");
-  if (latInput) latInput.value = lat.toFixed(6);
-  if (lonInput) lonInput.value = lon.toFixed(6);
-  if (leafletMap) leafletMap.setView([lat, lon], Math.max(leafletMap.getZoom(), 18));
-}
-
-// Same rectangle the server builds: centred on the coordinate, axis-aligned.
+// Same rectangle the server builds: centred on the rover, axis-aligned local
+// metres.  Nothing is drawn until a map origin exists to place it on the map.
 function areaCornersGeo(form) {
-  if (!Number.isFinite(form.lat) || !Number.isFinite(form.lon)) return [];
-  const halfLat = (form.length / 2) / EARTH_M_PER_DEG;
-  const halfLon = (form.width / 2) / (EARTH_M_PER_DEG * Math.cos(form.lat * Math.PI / 180));
+  if (!originSetForWork && !loadedOrigin) return [];
+  const pose = lastPose || { x_m: 0, y_m: 0 };
   return [
-    [form.lat - halfLat, form.lon - halfLon],
-    [form.lat - halfLat, form.lon + halfLon],
-    [form.lat + halfLat, form.lon + halfLon],
-    [form.lat + halfLat, form.lon - halfLon],
+    localToGeo(pose.x_m - form.width / 2, pose.y_m - form.length / 2),
+    localToGeo(pose.x_m + form.width / 2, pose.y_m - form.length / 2),
+    localToGeo(pose.x_m + form.width / 2, pose.y_m + form.length / 2),
+    localToGeo(pose.x_m - form.width / 2, pose.y_m + form.length / 2),
   ];
 }
 
@@ -776,13 +755,9 @@ function previewWorkArea() {
   if (areaPreviewLayer) areaPreviewLayer.setLatLngs(corners.length === 4 ? corners : []);
   const note = document.getElementById("areaPlanNote");
   if (!note) return;
-  if (!corners.length) {
-    note.innerText = "Set the centre coordinates to preview the sweep.";
-    return;
-  }
   const passes = planPassCount(form);
   const distance = passes * Math.max(form.width, form.length);
-  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m at ${form.swath.toFixed(2)} m per pass → ${passes} passes, about ${distance.toFixed(0)} m of driving.`;
+  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m at ${form.swath.toFixed(2)} m per pass → ${passes} passes, about ${distance.toFixed(0)} m of driving, centred on the rover.`;
 }
 
 function updateAreaSummary(area) {
@@ -799,8 +774,7 @@ function updateAreaSummary(area) {
 
 function openWorkArea() {
   const area = window.activeWorkArea;
-  if (area && Number.isFinite(area.center_lat) && Number.isFinite(area.center_lon)) {
-    setAreaCentre(area.center_lat, area.center_lon);
+  if (area) {
     const widthInput = document.getElementById("areaWidth");
     const lengthInput = document.getElementById("areaLength");
     const swathInput = document.getElementById("areaSwath");
@@ -809,75 +783,41 @@ function openWorkArea() {
     if (lengthInput && Number.isFinite(area.height_m)) lengthInput.value = area.height_m;
     if (swathInput && Number.isFinite(area.swath_m)) swathInput.value = area.swath_m;
     if (nameInput && area.name) nameInput.value = area.name;
-  } else {
-    const rover = getRoverGeoPosition();
-    if (rover) setAreaCentre(rover[0], rover[1]);
   }
   openModal("workAreaModal");
   previewWorkArea();
 }
 
 function closeWorkArea() {
-  pickAreaCentre = false;
-  const pickBtn = document.getElementById("pickAreaBtn");
-  if (pickBtn) pickBtn.classList.remove("active");
   if (areaPreviewLayer) areaPreviewLayer.setLatLngs([]);
   closeModal("workAreaModal");
 }
 
-function useRoverPosition() {
-  const rover = getRoverGeoPosition();
-  if (!rover) {
-    showToast("Rover position not available yet");
-    return;
-  }
-  setAreaCentre(rover[0], rover[1]);
-  previewWorkArea();
-}
-
-function pickAreaOnMap() {
-  if (!leafletMap) return;
-  pickAreaCentre = true;
-  const pickBtn = document.getElementById("pickAreaBtn");
-  if (pickBtn) pickBtn.classList.add("active");
-  closeModal("workAreaModal");
-  showToast("Tap the work area centre on the map");
-}
-
 function saveWorkArea() {
   const form = areaForm();
-  if (!Number.isFinite(form.lat) || !Number.isFinite(form.lon)) {
-    showToast("Pick the centre on the map or type its coordinates");
-    return;
-  }
-  if (!originSetForWork && !loadedOrigin) {
-    showToast("Tap “Origin here” at the rover first");
-    return;
-  }
   showToast("Saving work area…");
   fetch(`${baseURL}/api/areas/rect`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: form.name,
-      center: [form.lat, form.lon],
       width_m: form.width,
       height_m: form.length,
       swath_m: form.swath,
-      origin: mapOrigin,
     }),
   }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
     .then(({ ok, data }) => {
       if (!ok) throw new Error(data.error || "Could not set the work area");
       window.activeWorkArea = data.area;
       loadedAreaId = data.area.id;
-      workAreaLayer.setLatLngs(data.area.map_polygon || []);
-      if (Array.isArray(data.area.map_polygon) && data.area.map_polygon.length >= 3) {
+      const areaPoints = data.area.map_polygon || [];
+      workAreaLayer.setLatLngs(areaPoints);
+      if (areaPoints.length >= 3 && leafletMap) {
         leafletMap.fitBounds(workAreaLayer.getBounds(), { padding: [24, 24], maxZoom: 18 });
       }
       closeWorkArea();
       updateAreaSummary(data.area);
-      showToast(`Work area “${data.area.name}” set · ${form.width} × ${form.length} m`);
+      showToast(`Work area “${data.area.name}” set · ${form.width} × ${form.length} m, centred on the rover`);
     })
     .catch((error) => showToast(error.message));
 }
@@ -998,7 +938,7 @@ function toggleWaterPump(action = "toggle") {
 function toggleAutoMode(action = "toggle") {
   const willStart = action === "start" || (action !== "stop" && !roverAutoActive);
   if (willStart && !window.activeWorkArea) {
-    showToast("Choose the work area centre and size first");
+    showToast("Set the work area breadth and length first");
     openWorkArea();
     return;
   }
