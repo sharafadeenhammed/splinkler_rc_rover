@@ -35,8 +35,7 @@ from helpers.auto_plan import (
     DEFAULT_SWATH_M,
     MIN_AREA_M,
     MIN_DUTY,
-    plan_polygon,
-    rectangle_world_polygon,
+    plan_rectangle_boustrophedon,
     segment_heading,
     segment_length,
     steer_duties,
@@ -879,10 +878,10 @@ def _build_plan(run):
     """Strips covering the dashboard work area, in map coordinates."""
     if not has_work_area():
         raise RuntimeError("set the work area on the map before starting")
-    polygon = rectangle_world_polygon(
-        AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M
+    plan = plan_rectangle_boustrophedon(
+        AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M,
+        SWATH_M, SWATH_OVERLAP,
     )
-    plan = plan_polygon(polygon, SWATH_M, SWATH_OVERLAP)
     if not plan:
         raise RuntimeError(
             f"a {AREA_WIDTH_M:.1f} x {AREA_HEIGHT_M:.1f} m area produced no strips"

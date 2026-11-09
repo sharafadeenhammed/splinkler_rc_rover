@@ -693,7 +693,7 @@ function areaCornersGeo(form) {
 // plus a last pass when the spacing would leave the far edge dry.
 function planPassCount(form) {
   const spacing = form.swath * 0.9;            // 10% overlap, as the planner does
-  const across = Math.min(form.width, form.length);
+  const across = form.width;
   let rows = Math.floor(across / spacing + 1e-9) + 1;
   if ((rows - 1) * spacing < across - form.swath / 2) rows += 1;
   return Math.max(1, rows);
@@ -706,8 +706,9 @@ function previewWorkArea() {
   const note = document.getElementById("areaPlanNote");
   if (!note) return;
   const passes = planPassCount(form);
-  const distance = passes * Math.max(form.width, form.length);
-  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m at ${form.swath.toFixed(2)} m per pass → ${passes} passes, about ${distance.toFixed(0)} m of driving, centred on the rover.`;
+  const spacing = form.swath * 0.9;
+  const distance = passes * form.length + Math.max(0, passes - 1) * spacing;
+  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m · ${passes} lengthwise passes across breadth · about ${distance.toFixed(0)} m driving.`;
 }
 
 function updateAreaSummary(area) {

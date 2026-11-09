@@ -200,6 +200,29 @@ def test_mapped_polygon():
           plan.total_planned_length(cw_strips))
 
 
+def test_rectangle_length_breadth_sweep():
+    print("length/breadth rectangle sweep")
+    # Breadth is 8 m east-west; length is 3 m north-south. Even though the
+    # breadth is longer, each pass must follow length and rows cross breadth.
+    strips = plan.plan_rectangle_boustrophedon(10.0, 20.0, 8.0, 3.0, 0.5, 0.1)
+    check("passes follow the configured length", all(
+        close(strip["x1"] - strip["x0"], 0.0, 1e-6)
+        and close(abs(strip["y1"] - strip["y0"]), 3.0, 1e-6)
+        for strip in strips),
+        [(strip["x0"], strip["y0"], strip["x1"], strip["y1"])
+         for strip in strips[:2]])
+    row_gaps = [abs(strips[index + 1]["x0"] - strips[index]["x0"])
+                for index in range(len(strips) - 1)]
+    check("rows advance across breadth without exceeding spacing", all(
+        0.0 < gap <= 0.45 + 1e-6 for gap in row_gaps), row_gaps[-3:])
+    check("row directions alternate", all(
+        (strips[index]["y1"] - strips[index]["y0"])
+        * (strips[index + 1]["y1"] - strips[index + 1]["y0"]) < 0
+        for index in range(len(strips) - 1)))
+    check("total pass distance uses length",
+          close(plan.total_planned_length(strips), len(strips) * 3.0, 1e-6))
+
+
 def test_normalize_and_world_transform():
     print("frames")
     polygon = [[5.0, 7.0], [9.0, 7.0], [9.0, 9.0], [5.0, 9.0]]
@@ -403,6 +426,7 @@ def main():
     test_rectangle_plan()
     test_concave_polygon()
     test_mapped_polygon()
+    test_rectangle_length_breadth_sweep()
     test_offset_area()
     test_normalize_and_world_transform()
     test_track_errors()

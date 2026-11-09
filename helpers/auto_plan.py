@@ -109,6 +109,40 @@ def rectangle_world_polygon(center_x, center_y, width_m, height_m):
     ]
 
 
+def plan_rectangle_boustrophedon(center_x, center_y, breadth_m, length_m,
+                                  swath_m=DEFAULT_SWATH_M,
+                                  overlap=DEFAULT_OVERLAP):
+    """Plan a centred rectangle with passes along length and rows across breadth.
+
+    The UI's breadth is the east-west span (world x), and length is the
+    north-south span (world y). Unlike :func:`plan_polygon`, this does not
+    rotate the sweep to the longest edge: each strip always runs north/south
+    for ``length_m`` and the boustrophedon rows advance east/west.
+    """
+    cx, cy = float(center_x), float(center_y)
+    breadth, length = float(breadth_m), float(length_m)
+    if not all(math.isfinite(value) for value in (cx, cy, breadth, length)):
+        raise ValueError("Rectangle dimensions and centre must be finite")
+    if breadth <= 0.0 or length <= 0.0:
+        raise ValueError("Rectangle breadth and length must be positive")
+
+    # In this planning frame x is the commanded pass length and y is the
+    # breadth across which rows advance. Transform its segments back to ENU.
+    local_polygon = rectangle_polygon(length, breadth)
+    segments = []
+    for index, strip in enumerate(plan_strips(local_polygon, swath_m, overlap)):
+        local_segment = strip_segment(strip, index)
+        segments.append({
+            "index": index,
+            "x0": cx + local_segment["y0"] - breadth / 2.0,
+            "y0": cy + local_segment["x0"] - length / 2.0,
+            "x1": cx + local_segment["y1"] - breadth / 2.0,
+            "y1": cy + local_segment["x1"] - length / 2.0,
+            "length_m": segment_length(local_segment),
+        })
+    return segments
+
+
 def offsets_world_polygon(forward, back, left, right, origin_x, origin_y, heading_rad):
     """Offsets rectangle placed on the ground at the rover's pose."""
     polygon = offsets_polygon(forward, back, left, right)
@@ -409,6 +443,7 @@ __all__ = [
     "MIN_AREA_M",
     "MIN_DUTY",
     "rectangle_world_polygon",
+    "plan_rectangle_boustrophedon",
     "offsets_polygon",
     "offsets_world_polygon",
     "to_world_point",
