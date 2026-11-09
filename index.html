@@ -267,11 +267,13 @@
 
         .btn-grid {
             display: flex;
+            flex-wrap: wrap;
             gap: 10px;
         }
 
         .btn-grid .btn {
             margin-top: 0;
+            flex: 1 1 130px;
         }
 
         #terminal {
@@ -385,7 +387,12 @@
             <div class="btn-grid">
                 <button class="btn btn-success needs-conn" data-cmd="START" disabled>Start app</button>
                 <button class="btn btn-danger needs-conn" data-cmd="STOP" disabled>Stop app</button>
+                <button class="btn btn-ghost needs-conn" data-cmd="RESTART_ROVER" disabled>Restart rover service</button>
             </div>
+            <div class="section-head" style="margin-top:14px">
+                <h3 class="section-title">Camera stream</h3>
+            </div>
+            <button class="btn btn-ghost needs-conn" data-cmd="RESTART_MEDIAMTX" disabled>Restart MediaMTX</button>
             <button id="btn-update" class="btn btn-ghost needs-conn" disabled>Update rover code</button>
         </div>
 
