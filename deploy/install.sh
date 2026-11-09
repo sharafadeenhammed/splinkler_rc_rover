@@ -81,7 +81,7 @@ else
 fi
 
 # bluez is what bt.py talks to over D-Bus (BLE provisioning: Wi-Fi setup,
-# START/STOP/UPDATE of rover.service, IP and update-status reads).
+# START/STOP/RESTART_ROVER/RESTART_MEDIAMTX/UPDATE commands, IP and update status).
 echo "==> bluetooth"
 sudo systemctl enable --now bluetooth.service || echo "    bluetooth.service could not be started"
 if command -v rfkill >/dev/null 2>&1; then

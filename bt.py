@@ -196,22 +196,37 @@ def set_wifi_credentials(ssid, password):
         return False
 
 
-def systemctl_action(verb):
+def systemctl_action(verb, service):
+    """Run one allow-listed systemd action without blocking the BLE loop."""
+    allowed_services = {"rover.service", "mediamtx.service"}
+    if verb not in {"start", "stop", "restart"} or service not in allowed_services:
+        print(f"[BLE] Refusing unsupported systemctl action: {verb} {service}")
+        return False
     try:
-        r = subprocess.run(["sudo", "systemctl", verb, "rover.service"],
+        r = subprocess.run(["sudo", "systemctl", verb, service],
                            capture_output=True, text=True, timeout=30)
-        print(f"[BLE] systemctl {verb} rover.service -> code {r.returncode} {r.stderr.strip()}")
+        detail = (r.stderr.strip() or r.stdout.strip())
+        print(f"[BLE] systemctl {verb} {service} -> code {r.returncode} {detail}")
+        return r.returncode == 0
     except Exception as e:
-        print(f"[BLE Error] systemctl {verb} failed: {e}")
+        print(f"[BLE Error] systemctl {verb} {service} failed: {e}")
+        return False
 
 
 def control_app(action):
     global update_status
     action_str = action.strip().upper()
     if action_str == "START":
-        run_in_thread(systemctl_action, "start")
+        run_in_thread(systemctl_action, "start", "rover.service")
     elif action_str == "STOP":
-        run_in_thread(systemctl_action, "stop")
+        run_in_thread(systemctl_action, "stop", "rover.service")
+    elif action_str in {"RESTART_ROVER", "RESTART_ROVER_SERVICE", "RESTART ROVER"}:
+        run_in_thread(systemctl_action, "restart", "rover.service")
+    elif action_str in {
+        "RESTART_MEDIAMTX", "RESTART_MEDIAMTX_SERVICE", "RESTART MEDIAMTX",
+        "RESTART MEDIAMTX.SERVICE",
+    }:
+        run_in_thread(systemctl_action, "restart", "mediamtx.service")
     elif action_str == "UPDATE":
         if update_status != "RUNNING":
             update_status = "RUNNING"   # set now so the dashboard never reads a stale status

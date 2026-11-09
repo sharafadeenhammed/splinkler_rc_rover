@@ -110,7 +110,6 @@ PROBE_DEPLOY_ANGLE = -20.0        # sensor_servo down into the soil
 PROBE_RETRACT_ANGLE = -90.0
 PROBE_SETTLE_S = 1.2
 SOIL_CHECK_INTERVAL_M = 1.5
-WATERING_RUN_M = 1.0
 
 ULTRASONIC_PERIOD_S = 0.08        # ~12 Hz pings; the echo read is one behind
 ULTRASONIC_MIN_VALID_CM = 2.0
@@ -141,6 +140,10 @@ auto_progress = {
     "fault": "",
     "status": "idle",
     "message": "",
+    "soil_state": "Not checked",
+    "soil_checked_at": None,
+    "soil_error": "",
+    "watering_strip": False,
 }
 
 
@@ -767,48 +770,42 @@ def _follow_segment(run, segment, *, max_distance=None, water=False):
 
 
 # -------------------------------------------------------------- soil/water ---
-def _water_along(run, segment, metres=WATERING_RUN_M):
-    """Drive a stretch with the pump on, cross-track corrected like a strip."""
-    _publish(run, phase="watering", message="watering the dry patch")
-    try:
-        driven, reason = _follow_segment(run, segment, max_distance=metres)
-    finally:
-        try:
-            WATER_PUMP.turnOffPump()
-        except Exception:
-            pass
-        _halt()
-    # The stretch just driven was watered, so start the next probe interval
-    # from here rather than probing again a few centimetres later.
-    run.distance_since_soil = 0.0
-    print(f"💧 Watered {driven:.2f} m ({reason})")
-    return driven
-
-
 def _soil_step(run, segment):
-    """Probe the soil, water the stretch ahead when it reads dry."""
+    """Stop, deploy the probe, and return a fresh wet/dry reading."""
     _publish(run, phase="soil", message="checking soil moisture")
     _halt()
     if not _pause(run, 0.3):
-        return
+        return "unknown"
     run.distance_since_soil = 0.0
     state = ""
+    error = ""
     try:
         sensor_servo.angle = PROBE_DEPLOY_ANGLE
         if not _pause(run, PROBE_SETTLE_S):
-            return
+            return "unknown"
         state = str(MOISTURE_SENSOR.getSoilMoistureState()).strip().lower()
     except Exception as exc:
-        print(f"⚠️ Soil check failed ({exc})")
+        error = str(exc)
+        print(f"⚠️ Soil check failed ({error})")
     finally:
         _retract_probe()
     if not _pause(run, 0.6):
-        return
-    print(f"🌱 Soil reads {state or 'unknown'} at strip {run.index + 1}")
-    if state == "dry":
-        _water_along(run, segment)
-    else:
-        _publish(run, phase="driving")
+        return "unknown"
+    if state not in {"wet", "dry"}:
+        diagnostics = MOISTURE_SENSOR.getDiagnostics()
+        error = error or diagnostics.get("error") or "sensor returned no valid wet/dry state"
+        state = "unknown"
+    checked_at = time.strftime("%H:%M:%S")
+    auto_progress.update({
+        "soil_state": state.capitalize(),
+        "soil_checked_at": checked_at,
+        "soil_error": error,
+    })
+    _publish(run, phase="soil", message=f"soil {state} · {checked_at}",
+             soil_state=state.capitalize(), soil_checked_at=checked_at,
+             soil_error=error)
+    print(f"🌱 Soil reads {state} at strip {run.index + 1} ({checked_at})")
+    return state
 
 
 # --------------------------------------------------------------- obstacles ---
