@@ -104,18 +104,54 @@ def test_rectangle_plan():
     check("every row is within half a swath of a pass", covered)
 
 
-def test_rover_width_limits_coverage():
-    print("rover width limits strip spacing")
-    effective = plan.effective_coverage_width(0.50, 0.30)
-    spacing = plan.strip_spacing(effective, 0.10)
-    strips = plan.plan_rectangle_boustrophedon(0.0, 0.0, 6.0, 6.0, effective, 0.10)
-    wide_swath_strips = plan.plan_rectangle_boustrophedon(0.0, 0.0, 6.0, 6.0, 0.50, 0.10)
-    check("narrow rover footprint limits effective coverage", close(effective, 0.30), effective)
-    check("lane spacing uses rover width and overlap", close(spacing, 0.27), spacing)
-    check("narrow rover plans more strips than the wider swath", len(strips) > len(wide_swath_strips),
-          (len(strips), len(wide_swath_strips)))
-    check("invalid rover width is rejected",
-          _raises_value_error(lambda: plan.effective_coverage_width(0.5, 0.0)))
+def test_device_width_sets_passes():
+    print("device width sets the pass count")
+    check("2 m breadth at 0.5 m wide is 4 passes", plan.sweep_pass_count(2.0, 0.5) == 4)
+    check("a remainder rounds up", plan.sweep_pass_count(2.2, 0.5) == 5,
+          plan.sweep_pass_count(2.2, 0.5))
+    check("an exact multiple does not add a pass", plan.sweep_pass_count(3.0, 0.5) == 6)
+    check("one pass covers a narrow area", plan.sweep_pass_count(0.4, 0.5) == 1)
+    check("zero width is rejected", _raises_value_error(
+        lambda: plan.sweep_pass_count(2.0, 0.0)))
+
+    offsets = plan.pass_offsets(2.0, 0.5)
+    check("passes sit inside the area, half a band in from each edge",
+          close(offsets[0], 0.25) and close(offsets[-1], 1.75), offsets)
+    check("even division spreads passes one device width apart",
+          close(plan.lane_spacing(2.0, 0.5), 0.5), plan.lane_spacing(2.0, 0.5))
+    check("a leftover becomes slight overlap, never a gap",
+          close(plan.lane_spacing(2.2, 0.5), 0.425),
+          plan.lane_spacing(2.2, 0.5))
+
+    # Full sweep: 2 m breadth, 3 m length, 0.5 m device.
+    strips = plan.plan_rectangle_boustrophedon(0.0, 0.0, 2.0, 3.0, 0.5)
+    check("four passes planned", len(strips) == 4, len(strips))
+    check("every pass is the length of the area",
+          all(close(strip["length_m"], 3.0) for strip in strips))
+    check("passes alternate direction", all(
+        (strips[index]["y1"] - strips[index]["y0"])
+        * (strips[index + 1]["y1"] - strips[index + 1]["y0"]) < 0
+        for index in range(len(strips) - 1)))
+    xs = sorted({round(strip["x0"], 6) for strip in strips})
+    check("passes are spread across the breadth", xs == [-0.75, -0.25, 0.25, 0.75], xs)
+    check("the run starts in one corner and ends in the opposite one",
+          close(strips[0]["x0"], -0.75) and close(strips[0]["y0"], -1.5)
+          and close(strips[-1]["x0"], 0.75) and close(strips[-1]["y1"], -1.5),
+          [(s["x0"], s["y0"], s["y1"]) for s in (strips[0], strips[-1])])
+
+    worst = 0.0
+    y = -1.5
+    while y <= 1.5 + 1e-9:
+        x = -1.0
+        while x <= 1.0 + 1e-9:
+            worst = max(worst, min(_distance_to_segment(x, y, strip) for strip in strips))
+            x += 0.1
+        y += 0.1
+    check("the whole area is covered", worst <= 0.25 + 1e-6, worst)
+
+    summary = plan.sweep_summary(2.0, 3.0, 0.5)
+    check("summary counts the lane changes",
+          summary["passes"] == 4 and close(summary["distance_m"], 13.5), summary)
 
 
 def _raises_value_error(callback):
@@ -225,7 +261,7 @@ def test_rectangle_length_breadth_sweep():
     print("length/breadth rectangle sweep")
     # Breadth is 8 m east-west; length is 3 m north-south. Even though the
     # breadth is longer, each pass must follow length and rows cross breadth.
-    strips = plan.plan_rectangle_boustrophedon(10.0, 20.0, 8.0, 3.0, 0.5, 0.1)
+    strips = plan.plan_rectangle_boustrophedon(10.0, 20.0, 8.0, 3.0, 0.5)
     check("passes follow the configured length", all(
         close(strip["x1"] - strip["x0"], 0.0, 1e-6)
         and close(abs(strip["y1"] - strip["y0"]), 3.0, 1e-6)
@@ -234,8 +270,9 @@ def test_rectangle_length_breadth_sweep():
          for strip in strips[:2]])
     row_gaps = [abs(strips[index + 1]["x0"] - strips[index]["x0"])
                 for index in range(len(strips) - 1)]
+    check("8 m breadth at 0.5 m wide is 16 passes", len(strips) == 16, len(strips))
     check("rows advance across breadth without exceeding spacing", all(
-        0.0 < gap <= 0.45 + 1e-6 for gap in row_gaps), row_gaps[-3:])
+        0.0 < gap <= 0.5 + 1e-6 for gap in row_gaps), row_gaps[-3:])
     check("row directions alternate", all(
         (strips[index]["y1"] - strips[index]["y0"])
         * (strips[index + 1]["y1"] - strips[index + 1]["y0"]) < 0
@@ -251,7 +288,7 @@ def test_rectangle_length_breadth_sweep():
         for index, connector in enumerate(connectors)))
     check("lane-change connectors cross breadth", all(
         close(connector["y1"] - connector["y0"], 0.0, 1e-6)
-        and abs(connector["x1"] - connector["x0"]) <= 0.45 + 1e-6
+        and abs(connector["x1"] - connector["x0"]) <= 0.5 + 1e-6
         for connector in connectors if connector is not None))
     check("total pass distance uses length",
           close(plan.total_planned_length(strips), len(strips) * 3.0, 1e-6))
@@ -458,7 +495,7 @@ def test_degenerate_input():
 
 def main():
     test_rectangle_plan()
-    test_rover_width_limits_coverage()
+    test_device_width_sets_passes()
     test_concave_polygon()
     test_mapped_polygon()
     test_rectangle_length_breadth_sweep()

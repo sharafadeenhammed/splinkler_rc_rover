@@ -1,11 +1,11 @@
 """Autonomous area coverage for the sprinkler rover.
 
 The mission is one explicit sweep of a work area the dashboard defines: a
-centre coordinate plus the two side lengths in metres.  That rectangle is
-planned into boustrophedon strips and each strip is driven by a small
-closed-loop follower:
+breadth and a length in metres, centred on the rover.  The number of passes is
+the breadth divided by the width of the machine's work band, and the passes
+run along the length, alternating direction (boustrophedon):
 
-    transit to the area -> for every strip: line up, drive, step across
+    transit to the area -> for every pass: line up, drive, step across
 
 Design rules this rewrite follows, learned from field runs where the rover
 drove a short way and quietly stopped:
@@ -31,16 +31,15 @@ import threading
 import time
 
 from helpers.auto_plan import (
-    DEFAULT_OVERLAP,
     DEFAULT_SWATH_M,
     MIN_AREA_M,
     MIN_DUTY,
-    effective_coverage_width,
     plan_rectangle_boustrophedon,
     plan_connector,
     segment_heading,
     segment_length,
     steer_duties,
+    sweep_summary,
     total_planned_length,
     track_errors,
     wrap_angle,
@@ -64,17 +63,18 @@ ROVER_LENGTH_M = 0.70
 
 # ------------------------------------------------------------- work area ----
 # The area is a rectangle in the dashboard's local frame (x east, y north,
-# metres from the saved map origin).  It is set from a coordinate + two side
-# lengths; nothing is planned until one exists.
+# metres from the saved map origin): breadth east-west, length north-south.
+# It is centred on the rover where it stood when the area was set; nothing is
+# planned until one exists.
 AREA_CENTER_X = None
 AREA_CENTER_Y = None
 AREA_WIDTH_M = 0.0            # east-west side
 AREA_HEIGHT_M = 0.0           # north-south side
 MAX_AREA_SIDE_M = 100.0
 
-# Width of ground one pass actually covers (the wetted band, not the chassis).
+# Width of ground one pass covers - the device's work band, not the chassis.
+# The number of passes is the area breadth divided by this.
 SWATH_M = DEFAULT_SWATH_M
-SWATH_OVERLAP = DEFAULT_OVERLAP
 
 # ---------------------------------------------------------------- driving ----
 # MIN_DUTY (auto_plan) is the hard floor: below it the gearmotors hum without
@@ -193,9 +193,10 @@ def set_work_area(center_x, center_y, width_m, height_m, swath_m=None):
     AREA_HEIGHT_M = height
     if swath_m is not None:
         set_swath(swath_m)
-    print(f"📐 Work area set: {width:.1f} x {height:.1f} m "
-          f"centred on ({cx:.1f}, {cy:.1f}) m "
-          f"({width / max(SWATH_M, 0.01):.0f} x {height / max(SWATH_M, 0.01):.0f} passes)")
+    summary = sweep_summary(width, height, SWATH_M)
+    print(f"📐 Work area set: {width:.1f} m breadth x {height:.1f} m length "
+          f"centred on ({cx:.1f}, {cy:.1f}) m · {summary['passes']} passes of "
+          f"{height:.1f} m at {SWATH_M:.2f} m wide")
     return True
 
 
@@ -221,41 +222,32 @@ def get_work_area():
         "width_m": AREA_WIDTH_M,
         "height_m": AREA_HEIGHT_M,
         "swath_m": SWATH_M,
-        "overlap": SWATH_OVERLAP,
         "rover_width_m": ROVER_WIDTH_M,
-        "effective_swath_m": effective_coverage_width(SWATH_M, ROVER_WIDTH_M),
+        **sweep_summary(AREA_WIDTH_M, AREA_HEIGHT_M, SWATH_M),
     }
 
 
 def get_coverage_config():
-    effective = effective_coverage_width(SWATH_M, ROVER_WIDTH_M)
     return {
         "rover_width_m": ROVER_WIDTH_M,
         "swath_m": SWATH_M,
-        "effective_swath_m": effective,
-        "overlap": SWATH_OVERLAP,
-        "lane_spacing_m": effective * (1.0 - SWATH_OVERLAP),
+        "device_width_m": SWATH_M,
     }
 
 
-def set_swath(swath_m, overlap=None):
-    """Width of ground one pass wets (optionally the overlap fraction)."""
-    global SWATH_M, SWATH_OVERLAP
+def set_swath(swath_m):
+    """Width of ground one pass covers, the denominator of the pass count."""
+    global SWATH_M
     try:
         value = float(swath_m)
     except (TypeError, ValueError):
-        print(f"⚠️ Invalid swath {swath_m!r}")
+        print(f"⚠️ Invalid device width {swath_m!r}")
         return False
     if not 0.10 <= value <= 5.0:
-        print("⚠️ Swath must be between 0.10 m and 5.00 m")
+        print("⚠️ Device width must be between 0.10 m and 5.00 m")
         return False
     SWATH_M = value
-    if overlap is not None:
-        try:
-            SWATH_OVERLAP = max(0.0, min(0.8, float(overlap)))
-        except (TypeError, ValueError):
-            pass
-    print(f"📏 Swath set to {SWATH_M:.2f} m (overlap {SWATH_OVERLAP:.0%})")
+    print(f"📏 Device width set to {SWATH_M:.2f} m")
     return True
 
 
@@ -896,17 +888,18 @@ def _build_plan(run):
     if not has_work_area():
         raise RuntimeError("set the work area on the map before starting")
     plan = plan_rectangle_boustrophedon(
-        AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M,
-        effective_coverage_width(SWATH_M, ROVER_WIDTH_M), SWATH_OVERLAP,
+        AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M, SWATH_M,
     )
     if not plan:
         raise RuntimeError(
             f"a {AREA_WIDTH_M:.1f} x {AREA_HEIGHT_M:.1f} m area produced no strips"
         )
+    summary = sweep_summary(AREA_WIDTH_M, AREA_HEIGHT_M, SWATH_M)
     start = plan[0]
-    print(f"🗺️  Plan: {len(plan)} strips, {total_planned_length(plan):.1f} m, "
-          f"coverage width {effective_coverage_width(SWATH_M, ROVER_WIDTH_M):.2f} m "
-          f"(rover {ROVER_WIDTH_M:.2f} m), first strip starts at "
+    print(f"🗺️  Plan: {summary['passes']} passes of {summary['length_m']:.1f} m "
+          f"across {summary['breadth_m']:.1f} m at {summary['device_width_m']:.2f} m "
+          f"per pass (spacing {summary['lane_spacing_m']:.2f} m), "
+          f"{total_planned_length(plan):.1f} m of passes; first pass starts at "
           f"({start['x0']:.1f}, {start['y0']:.1f}) heading "
           f"{math.degrees(segment_heading(start)):.0f}°")
     return plan
@@ -1207,7 +1200,6 @@ __all__ = [
     "ROVER_WIDTH_M",
     "ROVER_LENGTH_M",
     "SWATH_M",
-    "SWATH_OVERLAP",
     "auto_progress",
     "set_pose_provider",
     "set_swath",

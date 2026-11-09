@@ -19,8 +19,6 @@ const toast = document.getElementById("toast");
 const missionPercent = document.getElementById("missionPercent");
 const throttleOutput = document.getElementById("throttleOutput");
 const areaSummary = document.getElementById("areaSummary");
-let roverWidthM = 0.30;
-let stripOverlap = 0.10;
 
 // New Auto Config Elements
 const autoSpeedSlider = document.getElementById("autoSpeedSlider");
@@ -470,15 +468,6 @@ function updateCompass(data) {
 function renderTelemetry(data) {
   if (!data) return;
 
-  if (data.coverage_config) {
-    const config = data.coverage_config;
-    const width = Number(config.rover_width_m);
-    const overlap = Number(config.overlap);
-    if (Number.isFinite(width) && width > 0) roverWidthM = width;
-    if (Number.isFinite(overlap) && overlap >= 0 && overlap < 1) stripOverlap = overlap;
-    if (document.getElementById("workAreaModal")?.classList.contains("open")) previewWorkArea();
-  }
-
   if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
   if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
   const autoSoil = data.auto_progress && data.auto_progress.soil_state;
@@ -714,15 +703,17 @@ function areaCornersGeo(form) {
   ];
 }
 
-// The rover footprint limits usable coverage width when it is narrower than
-// the configured spray band, matching the autonomous planner.
+// Passes needed to cover the breadth with one device-wide band - the same rule
+// the mission uses: breadth / device width, rounded up (2 m / 0.5 m = 4 pass).
 function planPassCount(form) {
-  const effectiveWidth = Math.min(form.swath, roverWidthM);
-  const spacing = effectiveWidth * (1 - stripOverlap);
-  const across = form.width;
-  let rows = Math.floor(across / spacing + 1e-9) + 1;
-  if ((rows - 1) * spacing < across - effectiveWidth / 2) rows += 1;
-  return Math.max(1, rows);
+  return Math.max(1, Math.ceil(form.width / form.swath - 1e-9));
+}
+
+// Passes are spread over the breadth, so spacing is the device width when the
+// breadth divides evenly and a little less (overlap, never a gap) when it does not.
+function planLaneSpacing(form, passes) {
+  if (passes <= 1) return 0;
+  return (form.width - form.swath) / (passes - 1);
 }
 
 function previewWorkArea() {
@@ -732,10 +723,9 @@ function previewWorkArea() {
   const note = document.getElementById("areaPlanNote");
   if (!note) return;
   const passes = planPassCount(form);
-  const effectiveWidth = Math.min(form.swath, roverWidthM);
-  const spacing = effectiveWidth * (1 - stripOverlap);
+  const spacing = planLaneSpacing(form, passes);
   const distance = passes * form.length + Math.max(0, passes - 1) * spacing;
-  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m · ${passes} strips · ${effectiveWidth.toFixed(2)} m coverage (rover ${roverWidthM.toFixed(2)} m) · about ${distance.toFixed(0)} m driving.`;
+  note.innerText = `${form.width.toFixed(1)} m breadth ÷ ${form.swath.toFixed(2)} m device = ${passes} passes of ${form.length.toFixed(1)} m, ${spacing.toFixed(2)} m apart · ${(passes * form.length).toFixed(0)} m of passes, about ${distance.toFixed(0)} m driving.`;
 }
 
 function updateAreaSummary(area) {

@@ -109,36 +109,98 @@ def rectangle_world_polygon(center_x, center_y, width_m, height_m):
     ]
 
 
-def plan_rectangle_boustrophedon(center_x, center_y, breadth_m, length_m,
-                                  swath_m=DEFAULT_SWATH_M,
-                                  overlap=DEFAULT_OVERLAP):
-    """Plan a centred rectangle with passes along length and rows across breadth.
+def sweep_pass_count(across_m, device_width_m):
+    """Passes needed to cover ``across_m`` of ground with one band of the device.
 
-    The UI's breadth is the east-west span (world x), and length is the
-    north-south span (world y). Unlike :func:`plan_polygon`, this does not
-    rotate the sweep to the longest edge: each strip always runs north/south
-    for ``length_m`` and the boustrophedon rows advance east/west.
+    This is the whole planning rule the rover runs on: a 2 m breadth worked by
+    a 0.5 m wide device needs 2 / 0.5 = 4 passes, and a breadth that is not a
+    whole multiple rounds up so the far edge is never left dry.
+    """
+    across = float(across_m)
+    width = float(device_width_m)
+    if not all(math.isfinite(value) and value > 0.0 for value in (across, width)):
+        raise ValueError("Breadth and device width must be finite and positive")
+    return max(1, int(math.ceil(across / width - 1e-9)))
+
+
+def lane_spacing(across_m, device_width_m):
+    """Distance between neighbouring pass centrelines.
+
+    With the requested number of passes spread over the breadth, the spacing is
+    the device width whenever the breadth is a whole multiple of it, and a
+    little less otherwise - the leftover becomes overlap instead of a gap.
+    """
+    across = float(across_m)
+    width = float(device_width_m)
+    count = sweep_pass_count(across, width)
+    if count <= 1:
+        return 0.0
+    return (across - width) / (count - 1)
+
+
+def pass_offsets(across_m, device_width_m):
+    """Offset of each pass centreline from the near edge, nearest first.
+
+    The first and last bands sit fully inside the area - half a device width in
+    from each edge - so the whole area is worked and no pass hangs outside it.
+    """
+    across = float(across_m)
+    width = float(device_width_m)
+    count = sweep_pass_count(across, width)
+    if count == 1:
+        return [across / 2.0]
+    spacing = lane_spacing(across, width)
+    return [width / 2.0 + index * spacing for index in range(count)]
+
+
+def sweep_summary(breadth_m, length_m, device_width_m):
+    """What the mission will do with an area, for the dashboard and the log."""
+    breadth = float(breadth_m)
+    length = float(length_m)
+    width = float(device_width_m)
+    passes = sweep_pass_count(breadth, width)
+    spacing = lane_spacing(breadth, width)
+    return {
+        "passes": passes,
+        "breadth_m": breadth,
+        "length_m": length,
+        "device_width_m": width,
+        "lane_spacing_m": spacing,
+        "pass_distance_m": passes * length,
+        "distance_m": passes * length + max(0, passes - 1) * spacing,
+    }
+
+
+def plan_rectangle_boustrophedon(center_x, center_y, breadth_m, length_m,
+                                 device_width_m=DEFAULT_SWATH_M):
+    """Sweep a centred rectangle: passes along its length, stepping across it.
+
+    ``breadth_m`` is the span across the passes (east-west, world x) and
+    ``length_m`` the span along them (north-south, world y).  There are as many
+    passes as the device width needs, they alternate direction, so the run
+    begins at one corner and finishes at the opposite one, as in the sketch.
     """
     cx, cy = float(center_x), float(center_y)
     breadth, length = float(breadth_m), float(length_m)
-    if not all(math.isfinite(value) for value in (cx, cy, breadth, length)):
+    width = float(device_width_m)
+    if not all(math.isfinite(value) for value in (cx, cy, breadth, length, width)):
         raise ValueError("Rectangle dimensions and centre must be finite")
-    if breadth <= 0.0 or length <= 0.0:
-        raise ValueError("Rectangle breadth and length must be positive")
+    if breadth <= 0.0 or length <= 0.0 or width <= 0.0:
+        raise ValueError("Rectangle breadth, length and device width must be positive")
 
-    # In this planning frame x is the commanded pass length and y is the
-    # breadth across which rows advance. Transform its segments back to ENU.
-    local_polygon = rectangle_polygon(length, breadth)
+    west = cx - breadth / 2.0
+    south = cy - length / 2.0
+    north = cy + length / 2.0
     segments = []
-    for index, strip in enumerate(plan_strips(local_polygon, swath_m, overlap)):
-        local_segment = strip_segment(strip, index)
+    for index, offset in enumerate(pass_offsets(breadth, width)):
+        x = west + offset
+        # Even passes run north, odd passes run back south.
+        y0, y1 = (south, north) if index % 2 == 0 else (north, south)
         segments.append({
             "index": index,
-            "x0": cx + local_segment["y0"] - breadth / 2.0,
-            "y0": cy + local_segment["x0"] - length / 2.0,
-            "x1": cx + local_segment["y1"] - breadth / 2.0,
-            "y1": cy + local_segment["x1"] - length / 2.0,
-            "length_m": segment_length(local_segment),
+            "x0": x, "y0": y0,
+            "x1": x, "y1": y1,
+            "length_m": length,
         })
     return segments
 
@@ -157,20 +219,6 @@ def strip_spacing(swath_m, overlap=DEFAULT_OVERLAP):
     swath = max(0.05, float(swath_m))
     overlap = max(0.0, min(0.9, float(overlap)))
     return swath * (1.0 - overlap)
-
-
-def effective_coverage_width(swath_m, rover_width_m):
-    """Use the narrower of the treatment swath and rover footprint.
-
-    This conservative width prevents the planner from leaving gaps when the
-    configured spray band is wider than the rover itself.
-    """
-    swath = float(swath_m)
-    rover_width = float(rover_width_m)
-    if not all(math.isfinite(value) and value > 0.0
-               for value in (swath, rover_width)):
-        raise ValueError("Swath and rover width must be finite and positive")
-    return min(swath, rover_width)
 
 
 def _line_spans(polygon, y, min_span_m=MIN_SPAN_M):
@@ -465,7 +513,10 @@ __all__ = [
     "normalize_polygon",
     "rectangle_polygon",
     "strip_spacing",
-    "effective_coverage_width",
+    "sweep_pass_count",
+    "lane_spacing",
+    "pass_offsets",
+    "sweep_summary",
     "plan_rows",
     "plan_strips",
     "plan_polygon",
