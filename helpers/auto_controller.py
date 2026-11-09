@@ -35,7 +35,9 @@ from helpers.auto_plan import (
     DEFAULT_SWATH_M,
     MIN_AREA_M,
     MIN_DUTY,
+    effective_coverage_width,
     plan_rectangle_boustrophedon,
+    plan_connector,
     segment_heading,
     segment_length,
     steer_duties,
@@ -220,6 +222,19 @@ def get_work_area():
         "height_m": AREA_HEIGHT_M,
         "swath_m": SWATH_M,
         "overlap": SWATH_OVERLAP,
+        "rover_width_m": ROVER_WIDTH_M,
+        "effective_swath_m": effective_coverage_width(SWATH_M, ROVER_WIDTH_M),
+    }
+
+
+def get_coverage_config():
+    effective = effective_coverage_width(SWATH_M, ROVER_WIDTH_M)
+    return {
+        "rover_width_m": ROVER_WIDTH_M,
+        "swath_m": SWATH_M,
+        "effective_swath_m": effective,
+        "overlap": SWATH_OVERLAP,
+        "lane_spacing_m": effective * (1.0 - SWATH_OVERLAP),
     }
 
 
@@ -672,7 +687,8 @@ def _drive_to_point(run, x, y, tolerance_m=POINT_TOLERANCE_M, timeout_s=None):
     return False
 
 
-def _follow_segment(run, segment, *, max_distance=None, water=False):
+def _follow_segment(run, segment, *, max_distance=None, water=False,
+                    check_soil=True):
     """Follow a straight segment with continuous cross-track correction.
 
     Returns (distance_driven_m, reason) with reason one of "done", "aborted",
@@ -718,10 +734,11 @@ def _follow_segment(run, segment, *, max_distance=None, water=False):
                 _halt()
                 return driven, "obstacle"
 
-            if not water:
+            if check_soil and not water:
                 run.distance_since_soil += max(0.0, along - last_along)
             last_along = along
-            if not water and run.distance_since_soil >= SOIL_CHECK_INTERVAL_M:
+            if (check_soil and not water
+                    and run.distance_since_soil >= SOIL_CHECK_INTERVAL_M):
                 _halt()
                 return driven, "soil"
 
@@ -880,7 +897,7 @@ def _build_plan(run):
         raise RuntimeError("set the work area on the map before starting")
     plan = plan_rectangle_boustrophedon(
         AREA_CENTER_X, AREA_CENTER_Y, AREA_WIDTH_M, AREA_HEIGHT_M,
-        SWATH_M, SWATH_OVERLAP,
+        effective_coverage_width(SWATH_M, ROVER_WIDTH_M), SWATH_OVERLAP,
     )
     if not plan:
         raise RuntimeError(
@@ -888,7 +905,8 @@ def _build_plan(run):
         )
     start = plan[0]
     print(f"🗺️  Plan: {len(plan)} strips, {total_planned_length(plan):.1f} m, "
-          f"swath {SWATH_M:.2f} m, first strip starts at "
+          f"coverage width {effective_coverage_width(SWATH_M, ROVER_WIDTH_M):.2f} m "
+          f"(rover {ROVER_WIDTH_M:.2f} m), first strip starts at "
           f"({start['x0']:.1f}, {start['y0']:.1f}) heading "
           f"{math.degrees(segment_heading(start)):.0f}°")
     return plan
@@ -963,6 +981,36 @@ def _run_strip(run, segment):
     return False
 
 
+def _follow_connector(run, connector):
+    """Drive the short lane-change segment that makes the sweep continuous."""
+    stalls = 0
+    evasions = 0
+    heading = segment_heading(connector)
+    while not run.aborted():
+        _publish(run, phase="turning", message="turning onto next strip")
+        if not _pivot_to(run, heading):
+            return False
+
+        _publish(run, phase="transit", message="following strip-end connector")
+        _driven, reason = _follow_segment(run, connector, check_soil=False)
+        if reason == "done":
+            return True
+        if reason == "obstacle":
+            evasions += 1
+            run.obstacles += 1
+            run.obstacle_hits = 0
+            if evasions > MAX_EVASIONS_PER_STRIP or not _sidestep(run, connector):
+                return False
+            continue
+        if reason == "stalled":
+            stalls += 1
+            if stalls > MAX_STALLS or not _recover_stall(run, connector):
+                return False
+            continue
+        return False
+    return False
+
+
 def _mission(run):
     # Auto owns the drive hardware: discard any manual drive/pump state before
     # navigating to the first strip or taking a soil reading.
@@ -992,6 +1040,7 @@ def _mission(run):
                     run.fault = "could not reach the work area"
                 return
 
+        align_next_strip = False
         for index, segment in enumerate(plan):
             if run.aborted():
                 return
@@ -1002,16 +1051,22 @@ def _mission(run):
             run.index = index
             heading = segment_heading(segment)
 
-            # Walk onto the strip start first (the step across to the next row
-            # is only a few decimetres), then line up with the pass.
+            # A successful previous pass is connected to this one by a
+            # measured cross-lane segment below. Keep this point-drive only as
+            # recovery when the previous strip or connector was incomplete.
             pose = _pose(run)
             start_gap = math.hypot(segment["x0"] - pose["x_m"],
                                    segment["y0"] - pose["y_m"])
-            if start_gap > STRIP_START_REACH_M:
+            if align_next_strip or start_gap > STRIP_START_REACH_M:
                 _publish(run, phase="turning",
                          message=f"moving onto strip {index + 1}/{run.total}")
-                _drive_to_point(run, segment["x0"], segment["y0"],
-                                tolerance_m=0.25)
+                if not _drive_to_point(run, segment["x0"], segment["y0"],
+                                       tolerance_m=0.12):
+                    if run.aborted():
+                        return
+                    run.fault = f"could not reach strip {index + 1} start"
+                    return
+            align_next_strip = False
             if run.aborted():
                 return
             _publish(run, phase="turning",
@@ -1022,11 +1077,21 @@ def _mission(run):
 
             _publish(run, phase="driving",
                      message=f"strip {index + 1}/{run.total}")
-            if not _run_strip(run, segment):
+            strip_complete = _run_strip(run, segment)
+            if not strip_complete:
                 if run.aborted():
                     return
                 if index + 1 not in run.incomplete:
                     run.incomplete.append(index + 1)
+                align_next_strip = True
+            elif index + 1 < len(plan):
+                connector = plan_connector(segment, plan[index + 1])
+                if connector and not _follow_connector(run, connector):
+                    if run.aborted():
+                        return
+                    align_next_strip = True
+                    _publish(run, phase="transit",
+                             message="connector missed · aligning with next strip")
 
         run.finished = True
         _publish(run, phase="done", message="sweep finished")
@@ -1151,6 +1216,7 @@ __all__ = [
     "clear_work_area",
     "has_work_area",
     "get_work_area",
+    "get_coverage_config",
     "set_rover_size",
     "start_auto_mode",
     "stop_auto_mode",

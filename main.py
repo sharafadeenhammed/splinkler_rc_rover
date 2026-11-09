@@ -37,7 +37,10 @@ from helpers.auto_plan import rectangle_world_polygon
 from helpers import motor_controls
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
-from helpers.auto_controller import WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV
+from helpers.auto_controller import (
+    WHEEL_DIAMETER_M, WHEEL_TRACK_M, TICKS_PER_WHEEL_REV,
+    get_coverage_config,
+)
 
 app = Flask(__name__)
 sock = Sock(app)
@@ -358,6 +361,7 @@ def get_telemetry_payload():
     payload["auto_active"] = is_auto_active()
     payload["auto_progress"] = get_auto_progress()
     payload["work_area"] = current_work_area()
+    payload["coverage_config"] = get_coverage_config()
     payload["motor_status"] = motor_status
     payload["camera_angle"] = camera_current_angle
     lt, rt = get_encoder_ticks()

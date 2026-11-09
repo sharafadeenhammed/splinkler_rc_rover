@@ -159,6 +159,20 @@ def strip_spacing(swath_m, overlap=DEFAULT_OVERLAP):
     return swath * (1.0 - overlap)
 
 
+def effective_coverage_width(swath_m, rover_width_m):
+    """Use the narrower of the treatment swath and rover footprint.
+
+    This conservative width prevents the planner from leaving gaps when the
+    configured spray band is wider than the rover itself.
+    """
+    swath = float(swath_m)
+    rover_width = float(rover_width_m)
+    if not all(math.isfinite(value) and value > 0.0
+               for value in (swath, rover_width)):
+        raise ValueError("Swath and rover width must be finite and positive")
+    return min(swath, rover_width)
+
+
 def _line_spans(polygon, y, min_span_m=MIN_SPAN_M):
     """Sorted (left, right) x pairs where the horizontal line `y` is inside."""
     intersections = []
@@ -451,6 +465,7 @@ __all__ = [
     "normalize_polygon",
     "rectangle_polygon",
     "strip_spacing",
+    "effective_coverage_width",
     "plan_rows",
     "plan_strips",
     "plan_polygon",

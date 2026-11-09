@@ -19,6 +19,8 @@ const toast = document.getElementById("toast");
 const missionPercent = document.getElementById("missionPercent");
 const throttleOutput = document.getElementById("throttleOutput");
 const areaSummary = document.getElementById("areaSummary");
+let roverWidthM = 0.30;
+let stripOverlap = 0.10;
 
 // New Auto Config Elements
 const autoSpeedSlider = document.getElementById("autoSpeedSlider");
@@ -468,6 +470,15 @@ function updateCompass(data) {
 function renderTelemetry(data) {
   if (!data) return;
 
+  if (data.coverage_config) {
+    const config = data.coverage_config;
+    const width = Number(config.rover_width_m);
+    const overlap = Number(config.overlap);
+    if (Number.isFinite(width) && width > 0) roverWidthM = width;
+    if (Number.isFinite(overlap) && overlap >= 0 && overlap < 1) stripOverlap = overlap;
+    if (document.getElementById("workAreaModal")?.classList.contains("open")) previewWorkArea();
+  }
+
   if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
   if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
   const autoSoil = data.auto_progress && data.auto_progress.soil_state;
@@ -703,13 +714,14 @@ function areaCornersGeo(form) {
   ];
 }
 
-// Mirrors helpers/auto_plan.plan_rows: rows every swath*0.9 from the near edge,
-// plus a last pass when the spacing would leave the far edge dry.
+// The rover footprint limits usable coverage width when it is narrower than
+// the configured spray band, matching the autonomous planner.
 function planPassCount(form) {
-  const spacing = form.swath * 0.9;            // 10% overlap, as the planner does
+  const effectiveWidth = Math.min(form.swath, roverWidthM);
+  const spacing = effectiveWidth * (1 - stripOverlap);
   const across = form.width;
   let rows = Math.floor(across / spacing + 1e-9) + 1;
-  if ((rows - 1) * spacing < across - form.swath / 2) rows += 1;
+  if ((rows - 1) * spacing < across - effectiveWidth / 2) rows += 1;
   return Math.max(1, rows);
 }
 
@@ -720,9 +732,10 @@ function previewWorkArea() {
   const note = document.getElementById("areaPlanNote");
   if (!note) return;
   const passes = planPassCount(form);
-  const spacing = form.swath * 0.9;
+  const effectiveWidth = Math.min(form.swath, roverWidthM);
+  const spacing = effectiveWidth * (1 - stripOverlap);
   const distance = passes * form.length + Math.max(0, passes - 1) * spacing;
-  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m · ${passes} lengthwise passes across breadth · about ${distance.toFixed(0)} m driving.`;
+  note.innerText = `${form.width.toFixed(1)} × ${form.length.toFixed(1)} m · ${passes} strips · ${effectiveWidth.toFixed(2)} m coverage (rover ${roverWidthM.toFixed(2)} m) · about ${distance.toFixed(0)} m driving.`;
 }
 
 function updateAreaSummary(area) {

@@ -93,7 +93,6 @@ def test_rectangle_plan():
 
     y_gaps = [strips[i + 1]["y"] - strips[i]["y"] for i in range(len(strips) - 1)]
     check("row spacing is uniform", all(close(gap, spacing) for gap in y_gaps), y_gaps[:3])
-
     # Coverage: every point of the area should be within half a swath of a row.
     covered = True
     y = 0.0
@@ -103,6 +102,28 @@ def test_rectangle_plan():
             break
         y += 0.1
     check("every row is within half a swath of a pass", covered)
+
+
+def test_rover_width_limits_coverage():
+    print("rover width limits strip spacing")
+    effective = plan.effective_coverage_width(0.50, 0.30)
+    spacing = plan.strip_spacing(effective, 0.10)
+    strips = plan.plan_rectangle_boustrophedon(0.0, 0.0, 6.0, 6.0, effective, 0.10)
+    wide_swath_strips = plan.plan_rectangle_boustrophedon(0.0, 0.0, 6.0, 6.0, 0.50, 0.10)
+    check("narrow rover footprint limits effective coverage", close(effective, 0.30), effective)
+    check("lane spacing uses rover width and overlap", close(spacing, 0.27), spacing)
+    check("narrow rover plans more strips than the wider swath", len(strips) > len(wide_swath_strips),
+          (len(strips), len(wide_swath_strips)))
+    check("invalid rover width is rejected",
+          _raises_value_error(lambda: plan.effective_coverage_width(0.5, 0.0)))
+
+
+def _raises_value_error(callback):
+    try:
+        callback()
+    except ValueError:
+        return True
+    return False
 
 
 def test_concave_polygon():
@@ -219,6 +240,19 @@ def test_rectangle_length_breadth_sweep():
         (strips[index]["y1"] - strips[index]["y0"])
         * (strips[index + 1]["y1"] - strips[index + 1]["y0"]) < 0
         for index in range(len(strips) - 1)))
+    connectors = [plan.plan_connector(first, second)
+                  for first, second in zip(strips, strips[1:])]
+    check("each pass links to the next at its endpoint", all(
+        connector is not None
+        and close(connector["x0"], strips[index]["x1"], 1e-6)
+        and close(connector["y0"], strips[index]["y1"], 1e-6)
+        and close(connector["x1"], strips[index + 1]["x0"], 1e-6)
+        and close(connector["y1"], strips[index + 1]["y0"], 1e-6)
+        for index, connector in enumerate(connectors)))
+    check("lane-change connectors cross breadth", all(
+        close(connector["y1"] - connector["y0"], 0.0, 1e-6)
+        and abs(connector["x1"] - connector["x0"]) <= 0.45 + 1e-6
+        for connector in connectors if connector is not None))
     check("total pass distance uses length",
           close(plan.total_planned_length(strips), len(strips) * 3.0, 1e-6))
 
@@ -424,6 +458,7 @@ def test_degenerate_input():
 
 def main():
     test_rectangle_plan()
+    test_rover_width_limits_coverage()
     test_concave_polygon()
     test_mapped_polygon()
     test_rectangle_length_breadth_sweep()
