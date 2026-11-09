@@ -570,51 +570,6 @@ function getRoverGeoPosition() {
   return null;
 }
 
-function applyOriginAtRover(sourceLabel) {
-  const selectedOrigin = getRoverGeoPosition();
-  if (!selectedOrigin) {
-    showToast("No rover position yet — wait for GPS or encoder data");
-    return Promise.reject(new Error("no position"));
-  }
-  const previousOrigin = mapOrigin.slice();
-  mapOrigin = selectedOrigin.slice();
-  if (leafletMap) {
-    leafletMap.setView(selectedOrigin, Math.max(leafletMap.getZoom(), 18));
-  }
-  if (mapCoordinateText) {
-    mapCoordinateText.innerText = `${selectedOrigin[0].toFixed(5)}, ${selectedOrigin[1].toFixed(5)}`;
-  }
-  const body = {
-    latitude: selectedOrigin[0],
-    longitude: selectedOrigin[1],
-    source: lastGps && lastGps.fix ? "gps" : "rover",
-  };
-  return fetch(`${baseURL}/api/navigation/origin`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
-    .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
-    .then(({ ok, data }) => {
-      if (!ok) throw new Error(data.error || "Could not set work origin");
-      trailPoints.length = 0;
-      if (trailLayer) trailLayer.setLatLngs([]);
-      loadedOrigin = true;
-      originSetForWork = true;
-      lastPose = { x_m: 0, y_m: 0, heading_deg: lastPose ? lastPose.heading_deg : 0 };
-      roverMarker.setLatLng(selectedOrigin);
-      if (poseText) {
-        poseText.innerText = `0.0m, 0.0m · ${(lastPose.heading_deg || 0).toFixed(0)}°`;
-      }
-      showToast(sourceLabel || "Map centred on rover — origin set to 0, 0 m");
-    })
-    .catch((error) => {
-      mapOrigin = previousOrigin;
-      showToast(error.message || "Could not set origin");
-      throw error;
-    });
-}
-
 function notifyFromResponse(msg) {
   if (!msg || msg.type !== "response") return;
   if (msg.success === false) {
@@ -688,11 +643,6 @@ function renderRoverMap(pose, area) {
     else if (fusion && fusion.mode === "odometry") label += " · enc+IMU";
     poseText.innerText = label;
   }
-}
-
-function setRoverStart() {
-  if (!leafletMap) return;
-  applyOriginAtRover("Work map centred on rover — local position reset to 0, 0 m");
 }
 
 function centerMapOnRover() {
