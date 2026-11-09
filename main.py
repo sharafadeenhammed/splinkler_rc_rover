@@ -152,11 +152,35 @@ def cached_active_area():
     return _area_cache["value"]
 
 
+def _adopt_rover_position_as_origin():
+  """Make the rover's own position the map origin, with no operator input.
+
+  The work area is set by breadth and length only, so nothing needs a typed
+  coordinate.  Binding the frame to the first GPS fix is what keeps the map,
+  the trail and GPS fusion meaningful; before this the operator had to tap
+  "Origin here".  Only runs while the rover is stopped, and only once.
+  """
+  if _map_origin_cache["value"]:
+    return False
+  snap = get_gps().get()
+  if not snap.get("fix") or snap.get("lat") is None or snap.get("lon") is None:
+    return False
+  if is_auto_active() or motor_status != "STOPPED":
+    return False
+  try:
+    apply_navigation_origin(float(snap["lat"]), float(snap["lon"]), source="rover")
+  except (TypeError, ValueError, RuntimeError) as exc:
+    print(f"⚠️ Could not adopt the rover position as the map origin: {exc}")
+    return False
+  print("📍 Rover position adopted as the map origin — no coordinates needed")
+  return True
+
 def navigation_loop():
   """Update local pose at 20 Hz (nothing is persisted)."""
   print("🧭 Navigation loop started.")
   while True:
     try:
+      _adopt_rover_position_as_origin()
       compass = update_compass()
       imu = update_imu()
       if compass.get("available") and imu.get("available"):
@@ -531,9 +555,17 @@ def set_static_cache_headers(response):
     """Cache static assets for a day: over the rover's flaky Wi-Fi the
     dashboard was re-downloading css/js on every single page load."""
     if request.path.startswith("/static/"):
-        # Overwrite (not setdefault): Flask's default is `no-cache`, which
-        # would otherwise win and keep the css/js re-downloading every load.
-        response.headers["Cache-Control"] = "public, max-age=86400"
+        # The dashboard's own css/js change with every deploy, and a browser
+        # holding a day-old index.js keeps showing removed controls (the work
+        # area dialog asking for an origin).  Revalidate those two every load;
+        # the vendor bundles never change, so they keep the long cache.
+        if request.path.endswith(("/index.js", "/index.css")):
+            response.headers["Cache-Control"] = "no-cache"
+            response.headers.pop("Expires", None)
+        else:
+            # Overwrite (not setdefault): Flask's default is `no-cache`, which
+            # would otherwise win and keep the vendor files re-downloading.
+            response.headers["Cache-Control"] = "public, max-age=86400"
     return response
 
 # WebSocket Endpoint
