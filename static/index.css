@@ -105,3 +105,26 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 .modal-tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .modal-tools .map-btn.active{border-color:var(--cyan);color:var(--cyan);background:rgba(57,217,208,.08)}
 .modal .calibration-note{margin-top:12px}
+
+/* ── Nothing may force the dashboard wider than the viewport ────────────
+   The map header's nowrap readouts set a min-content width larger than a
+   phone screen; the grid stretch then widened the camera card too and its
+   pan buttons (← PAN →) were pushed off the right edge. */
+.workspace-grid, .camera-card, .map-card { min-width: 0; }
+.panel-head, .panel-head > div, .map-head-meta { min-width: 0; }
+.coordinate-readout, .gps-readout { min-width: 0; flex: 0 1 auto; }
+.camera-controls { flex: none; flex-wrap: wrap; row-gap: 6px; }
+.camera-controls > div { display: flex; gap: 5px; flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .panel-head { flex-wrap: wrap; row-gap: 6px; }
+  .map-head-meta { flex-direction: row; align-items: center; gap: 8px; max-width: 100%; }
+  .gps-readout { max-width: 100%; }
+  .coordinate-readout { max-width: 100%; }
+}
+/* Camera pan: word buttons, so centre / left / right are readable on any
+   screen and do not depend on an arrow glyph existing in the font. */
+.camera-controls > span { color: var(--muted); font-size: 10px; }
+.camera-pan-group { display: flex; gap: 5px; }
+.camera-pan-btn { border: 1px solid var(--line); background: #18222f; color: var(--text); height: 30px; padding: 0 11px; border-radius: 7px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.camera-pan-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+.camera-pan-btn.is-center { background: rgba(57,217,208,.1); border-color: rgba(57,217,208,.4); color: var(--cyan); }
