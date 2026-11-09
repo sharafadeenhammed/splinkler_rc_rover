@@ -349,6 +349,7 @@ def get_telemetry_payload():
     with data_lock:
         payload = sensor_data.copy()
     payload["soil"] = MOISTURE_SENSOR.getSoilMoistureState()
+    payload["soil_diagnostics"] = MOISTURE_SENSOR.getDiagnostics()
     payload["pump_active"] = WATER_PUMP.isPumpOn()
     payload["sensor_deployed"] = sensor_servo_deployed or (sensor_servo.angle is not None and sensor_servo.angle > -50)
     payload["sensor_angle"] = sensor_servo.angle

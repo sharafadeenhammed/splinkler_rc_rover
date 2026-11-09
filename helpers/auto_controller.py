@@ -696,10 +696,8 @@ def _follow_segment(run, segment, *, max_distance=None, water=False):
 
     try:
         if water:
-            try:
-                WATER_PUMP.turnOnPump()
-            except Exception as exc:
-                print(f"⚠️ Could not start the pump ({exc})")
+            if not WATER_PUMP.turnOnPump():
+                raise RuntimeError("water pump did not turn on")
 
         while not run.aborted():
             pose = _pose(run)
@@ -720,9 +718,10 @@ def _follow_segment(run, segment, *, max_distance=None, water=False):
                 _halt()
                 return driven, "obstacle"
 
-            run.distance_since_soil += max(0.0, along - last_along)
+            if not water:
+                run.distance_since_soil += max(0.0, along - last_along)
             last_along = along
-            if run.distance_since_soil >= SOIL_CHECK_INTERVAL_M:
+            if not water and run.distance_since_soil >= SOIL_CHECK_INTERVAL_M:
                 _halt()
                 return driven, "soil"
 
@@ -770,7 +769,7 @@ def _follow_segment(run, segment, *, max_distance=None, water=False):
 
 
 # -------------------------------------------------------------- soil/water ---
-def _soil_step(run, segment):
+def _soil_step(run):
     """Stop, deploy the probe, and return a fresh wet/dry reading."""
     _publish(run, phase="soil", message="checking soil moisture")
     _halt()
@@ -780,18 +779,22 @@ def _soil_step(run, segment):
     state = ""
     error = ""
     try:
+        WATER_PUMP.turnOffPump()
+    except Exception as exc:
+        error = f"could not stop pump before soil check: {exc}"
+    try:
         sensor_servo.angle = PROBE_DEPLOY_ANGLE
         if not _pause(run, PROBE_SETTLE_S):
             return "unknown"
         state = str(MOISTURE_SENSOR.getSoilMoistureState()).strip().lower()
     except Exception as exc:
-        error = str(exc)
+        error = error or str(exc)
         print(f"⚠️ Soil check failed ({error})")
     finally:
         _retract_probe()
     if not _pause(run, 0.6):
         return "unknown"
-    if state not in {"wet", "dry"}:
+    if error or state not in {"wet", "dry"}:
         diagnostics = MOISTURE_SENSOR.getDiagnostics()
         error = error or diagnostics.get("error") or "sensor returned no valid wet/dry state"
         state = "unknown"
@@ -899,17 +902,35 @@ def _run_strip(run, segment):
     """
     stalls = 0
     run.evasions_this_strip = 0
+    initial_soil = _soil_step(run)
+    if initial_soil == "unknown":
+        raise RuntimeError("soil moisture sensor is unavailable; autonomous watering stopped")
+    water_strip = initial_soil == "dry"
+    _publish(run,
+             phase="watering" if water_strip else "driving",
+             message=("dry soil · watering this strip" if water_strip
+                      else "soil wet · checking at intervals"),
+             watering_strip=water_strip)
     while not run.aborted():
-        driven, reason = _follow_segment(run, segment)
+        driven, reason = _follow_segment(run, segment, water=water_strip)
         if reason == "done":
             run.completed += 1
             run.covered_m += segment_length(segment)
-            _publish(run, phase="driving")
+            _publish(run, phase="driving", watering_strip=False,
+                     message=f"strip {run.index + 1} complete")
             return True
         if reason == "aborted":
             return False
         if reason == "soil":
-            _soil_step(run, segment)
+            state = _soil_step(run)
+            if state == "unknown":
+                raise RuntimeError("soil moisture sensor is unavailable; autonomous watering stopped")
+            water_strip = state == "dry"
+            _publish(run,
+                     phase="watering" if water_strip else "driving",
+                     message=("dry soil · watering rest of this strip" if water_strip
+                              else "soil wet · resuming strip"),
+                     watering_strip=water_strip)
             continue
         if reason == "obstacle":
             run.evasions_this_strip += 1
@@ -943,6 +964,10 @@ def _run_strip(run, segment):
 
 
 def _mission(run):
+    # Auto owns the drive hardware: discard any manual drive/pump state before
+    # navigating to the first strip or taking a soil reading.
+    _halt_tools()
+    _retract_probe()
     _publish(run, phase="planning", message="planning the sweep")
     plan = _build_plan(run)
     _freeze_gps_heading(run)
@@ -1070,6 +1095,12 @@ def start_auto_mode():
 
         _run_counter += 1
         _current_run_id = _run_counter
+        auto_progress.update({
+            "soil_state": "Not checked",
+            "soil_checked_at": None,
+            "soil_error": "",
+            "watering_strip": False,
+        })
         run = _Run(_current_run_id,
                    use_ultrasonic=bool(auto_progress.get("ultrasonic", True)))
         auto_mode_active = True

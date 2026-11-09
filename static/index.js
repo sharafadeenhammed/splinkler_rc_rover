@@ -470,7 +470,21 @@ function renderTelemetry(data) {
 
   if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
   if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
-  if (valSoil) valSoil.innerText = data.soil || 'Dry';
+  const autoSoil = data.auto_progress && data.auto_progress.soil_state;
+  if (valSoil) {
+    valSoil.innerText = autoSoil && autoSoil !== "Not checked"
+      ? autoSoil
+      : (data.soil || "Unknown");
+    const diag = data.soil_diagnostics || {};
+    const checkedAt = data.auto_progress && data.auto_progress.soil_checked_at;
+    valSoil.title = [
+      checkedAt ? `Last probe: ${checkedAt}` : "No autonomous probe reading yet",
+      diag.pressed === null || diag.pressed === undefined
+        ? "GPIO input: unavailable"
+        : `GPIO input: ${diag.pressed ? "LOW/pressed" : "HIGH/released"}`,
+      (data.auto_progress && data.auto_progress.soil_error) || diag.error || "",
+    ].filter(Boolean).join(" · ");
+  }
   if (valDist) valDist.innerText = data.distance_cm !== undefined ? `${data.distance_cm} cm` : '--';
   if (valEncLeft) valEncLeft.innerText = data.encoder_left !== undefined ? data.encoder_left : '0';
   if (valEncRight) valEncRight.innerText = data.encoder_right !== undefined ? data.encoder_right : '0';
@@ -788,6 +802,9 @@ function updateAutoProgressUI(prog) {
       text = bits.join(" · ");
     }
     autoProgressText.innerText = text.toUpperCase();
+    autoProgressText.title = [prog.message, prog.soil_checked_at
+      ? `Last soil probe: ${prog.soil_state} at ${prog.soil_checked_at}` : ""]
+      .filter(Boolean).join(" · ");
   }
   if (autoProgressFill) {
     autoProgressFill.style.width = `${prog.coverage_pct || 0}%`;
