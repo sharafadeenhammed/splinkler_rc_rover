@@ -12,20 +12,10 @@ const valTemp = document.getElementById("valTemp");
 const valHumidity = document.getElementById("valHumidity");
 const valSoil = document.getElementById("valSoil");
 const valDist = document.getElementById("valDist");
-const modeTxt = document.getElementById("modeTxt");
 const wsStatusTxt = document.getElementById("wsStatusTxt");
 const connectionDot = document.getElementById("connectionDot");
 const toast = document.getElementById("toast");
-const missionPercent = document.getElementById("missionPercent");
 const throttleOutput = document.getElementById("throttleOutput");
-const areaSummary = document.getElementById("areaSummary");
-
-// New Auto Config Elements
-const autoSpeedSlider = document.getElementById("autoSpeedSlider");
-const autoSpeedVal = document.getElementById("autoSpeedVal");
-const autoProgressText = document.getElementById("autoProgressText");
-const autoProgressFill = document.getElementById("autoProgressFill");
-const areaNameInput = document.getElementById("areaNameInput");
 const roverMap = document.getElementById("roverMap");
 const poseText = document.getElementById("poseText");
 const mapCoordinateText = document.getElementById("mapCoordinateText");
@@ -90,19 +80,13 @@ function roverFetch(url, opts = {}) {
 
 let targetSpeed = 50;
 let activeDirection = null; // Tracks active motor direction
-let roverAutoActive = false;
 const mapOriginDefault = [6.5244, 3.3792];
 let mapOrigin = mapOriginDefault.slice();
 let lastPose = null;
 let leafletMap = null;
 let roverMarker = null;
-let workAreaLayer = null;
-let areaPreviewLayer = null;
 let trailLayer = null;
-let loadedAreaId = null;
-let loadedOrigin = false;
 let lastGps = null;
-let originSetForWork = false;
 let mapViewBootstrapped = false;
 const trailPoints = [];
 const EARTH_RADIUS_M = 6378137;
@@ -122,8 +106,6 @@ if (roverMap && window.L) {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(leafletMap);
-  workAreaLayer = L.polygon([], { color: "#38d9cf", weight: 2, fillColor: "#38d9cf", fillOpacity: 0.13 }).addTo(leafletMap);
-  areaPreviewLayer = L.polygon([], { color: "#f2ba66", weight: 2, dashArray: "4 4", fillColor: "#f2ba66", fillOpacity: 0.1 }).addTo(leafletMap);
   trailLayer = L.polyline([], { color: "#a78bfa", weight: 3, opacity: 0.8 }).addTo(leafletMap);
   roverMarker = L.marker(mapOrigin, { icon: L.divIcon({ className: "rover-map-marker", html: "<span>▲</span>", iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(leafletMap);
   leafletMap.on("click", (event) => {
@@ -357,7 +339,7 @@ function initWebSocket() {
   };
 
   ws.onclose = (event) => {
-    console.warn(`🔌 [WS] Disconnected (code: ${event.code}). Manual drive stopped; an autonomous mission keeps running.`);
+    console.warn(`🔌 [WS] Disconnected (code: ${event.code}). Manual drive stopped.`);
     handleDisconnect();
   };
 }
@@ -470,19 +452,14 @@ function renderTelemetry(data) {
 
   if (valTemp) valTemp.innerText = data.temperature !== undefined ? `${data.temperature}°C` : '--';
   if (valHumidity) valHumidity.innerText = data.humidity !== undefined ? `${data.humidity}%` : '--';
-  const autoSoil = data.auto_progress && data.auto_progress.soil_state;
   if (valSoil) {
-    valSoil.innerText = autoSoil && autoSoil !== "Not checked"
-      ? autoSoil
-      : (data.soil || "Unknown");
+    valSoil.innerText = data.soil || "Unknown";
     const diag = data.soil_diagnostics || {};
-    const checkedAt = data.auto_progress && data.auto_progress.soil_checked_at;
     valSoil.title = [
-      checkedAt ? `Last probe: ${checkedAt}` : "No autonomous probe reading yet",
       diag.pressed === null || diag.pressed === undefined
         ? "GPIO input: unavailable"
         : `GPIO input: ${diag.pressed ? "LOW/pressed" : "HIGH/released"}`,
-      (data.auto_progress && data.auto_progress.soil_error) || diag.error || "",
+      diag.error || "",
     ].filter(Boolean).join(" · ");
   }
   if (valDist) valDist.innerText = data.distance_cm !== undefined ? `${data.distance_cm} cm` : '--';
@@ -504,8 +481,7 @@ function renderTelemetry(data) {
 
   if (data.pump_active !== undefined) updatePumpUI(data.pump_active);
   if (data.sensor_deployed !== undefined) updateSensorUI(data.sensor_deployed);
-  if (data.auto_active !== undefined) updateAutoUI(data.auto_active);
-  
+
   if (data.motor_status !== undefined && statusTxt) {
     statusTxt.innerText = data.motor_status;
   }
@@ -514,12 +490,8 @@ function renderTelemetry(data) {
     if (angleElem) angleElem.innerText = data.camera_angle;
   }
   
-  if (data.auto_progress) {
-    updateAutoProgressUI(data.auto_progress);
-  }
   if (data.gps) updateGpsReadout(data.gps);
-  if (data.pose) renderRoverMap(data.pose, data.active_area);
-  if (data.active_area !== undefined) updateAreaSummary(data.active_area);
+  if (data.pose) renderRoverMap(data.pose);
   if (leafletMap && !mapViewBootstrapped) {
     if (data.gps && data.gps.fix && data.gps.lat != null) {
       leafletMap.setView([data.gps.lat, data.gps.lon], 18);
@@ -528,8 +500,6 @@ function renderTelemetry(data) {
       mapOrigin = data.map_origin;
       leafletMap.setView(mapOrigin, 18);
       roverMarker.setLatLng(mapOrigin);
-      loadedOrigin = true;
-      originSetForWork = true;
       mapViewBootstrapped = true;
     }
   }
@@ -600,10 +570,6 @@ function notifyFromResponse(msg) {
     showToast(msg.pump_active ? "Water pump on" : "Water pump off");
   } else if (cmd === "sensor_deploy") {
     showToast(msg.is_deployed ? "Probe deployed" : "Probe retracted");
-  } else if (cmd === "auto_mode") {
-    showToast(msg.auto_active ? "Autonomous mode started" : "Autonomous mode stopped");
-  } else if (cmd === "auto_speed" && msg.auto_speed_pct != null) {
-    showToast(`Auto speed set to ${msg.auto_speed_pct}%`);
   } else if (cmd === "camera_tilt" && msg.current_angle != null) {
     showToast(`Camera pan ${msg.current_angle}°`);
   }
@@ -623,27 +589,9 @@ function localToGeo(x, y, origin = mapOrigin) {
     origin[1] + (x / (EARTH_RADIUS_M * Math.cos(origin[0] * Math.PI / 180))) * 180 / Math.PI];
 }
 
-function renderRoverMap(pose, area) {
+function renderRoverMap(pose) {
   if (!leafletMap || !pose) return;
   lastPose = pose;
-  if (area) {
-    window.activeWorkArea = area;
-    if (loadedAreaId !== area.id) {
-      if (Number.isFinite(area.origin_lat) && Number.isFinite(area.origin_lon)) {
-        mapOrigin = [area.origin_lat, area.origin_lon];
-        loadedOrigin = true;
-        originSetForWork = true;
-      }
-      const areaPoints = Array.isArray(area.map_polygon) ? area.map_polygon : [];
-      workAreaLayer.setLatLngs(areaPoints);
-      if (areaPoints.length >= 3) {
-        leafletMap.fitBounds(workAreaLayer.getBounds(), { padding: [24, 24], maxZoom: 18 });
-      } else if (Number.isFinite(area.origin_lat) && Number.isFinite(area.origin_lon)) {
-        leafletMap.setView(mapOrigin, 18);
-      }
-      loadedAreaId = area.id;
-    }
-  }
   const roverGeo = localToGeo(pose.x_m, pose.y_m);
   roverMarker.setLatLng(roverGeo);
   roverMarker.setIcon(L.divIcon({ className: "rover-map-marker", html: `<span style="transform:rotate(${90 - (pose.heading_deg || 0)}deg)">▲</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }));
@@ -670,151 +618,6 @@ function centerMapOnRover() {
   showToast("Map centred on rover");
 }
 
-// ----------------- Work area: size only -----------------
-// The mission sweeps one explicit area, defined by how much ground it covers
-// east-west (breadth) and north-south (length).  It is centred on the rover
-// where it stands when the area is set, so no coordinates are needed.
-
-function areaNumber(id, fallback) {
-  const input = document.getElementById(id);
-  const value = input ? parseFloat(input.value) : NaN;
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function areaForm() {
-  return {
-    width: Math.min(100, Math.max(0.5, areaNumber("areaWidth", 6))),
-    length: Math.min(100, Math.max(0.5, areaNumber("areaLength", 6))),
-    swath: Math.min(5, Math.max(0.1, areaNumber("areaSwath", 0.5))),
-    name: ((document.getElementById("areaNameInput") || {}).value || "Work area").trim() || "Work area",
-  };
-}
-
-// Same rectangle the server builds: centred on the rover, axis-aligned local
-// metres.  Nothing is drawn until a map origin exists to place it on the map.
-function areaCornersGeo(form) {
-  if (!originSetForWork && !loadedOrigin) return [];
-  const pose = lastPose || { x_m: 0, y_m: 0 };
-  return [
-    localToGeo(pose.x_m - form.width / 2, pose.y_m - form.length / 2),
-    localToGeo(pose.x_m + form.width / 2, pose.y_m - form.length / 2),
-    localToGeo(pose.x_m + form.width / 2, pose.y_m + form.length / 2),
-    localToGeo(pose.x_m - form.width / 2, pose.y_m + form.length / 2),
-  ];
-}
-
-// Passes needed to cover the breadth with one device-wide band - the same rule
-// the mission uses: breadth / device width, rounded up (2 m / 0.5 m = 4 pass).
-function planPassCount(form) {
-  return Math.max(1, Math.ceil(form.width / form.swath - 1e-9));
-}
-
-// Passes are spread over the breadth, so spacing is the device width when the
-// breadth divides evenly and a little less (overlap, never a gap) when it does not.
-function planLaneSpacing(form, passes) {
-  if (passes <= 1) return 0;
-  return (form.width - form.swath) / (passes - 1);
-}
-
-function previewWorkArea() {
-  const form = areaForm();
-  const corners = areaCornersGeo(form);
-  if (areaPreviewLayer) areaPreviewLayer.setLatLngs(corners.length === 4 ? corners : []);
-  const note = document.getElementById("areaPlanNote");
-  if (!note) return;
-  const passes = planPassCount(form);
-  const spacing = planLaneSpacing(form, passes);
-  const distance = passes * form.length + Math.max(0, passes - 1) * spacing;
-  note.innerText = `${form.width.toFixed(1)} m breadth ÷ ${form.swath.toFixed(2)} m device = ${passes} passes of ${form.length.toFixed(1)} m, ${spacing.toFixed(2)} m apart · ${(passes * form.length).toFixed(0)} m of passes, about ${distance.toFixed(0)} m driving.`;
-}
-
-function updateAreaSummary(area) {
-  if (!areaSummary) return;
-  if (!area) {
-    areaSummary.innerText = "No work area set — open Work area…";
-    return;
-  }
-  const size = Number.isFinite(area.width_m) && Number.isFinite(area.height_m)
-    ? ` · ${area.width_m.toFixed(1)} × ${area.height_m.toFixed(1)} m`
-    : "";
-  areaSummary.innerText = `${area.name || "Work area"}${size}`;
-}
-
-function openWorkArea() {
-  const area = window.activeWorkArea;
-  if (area) {
-    const widthInput = document.getElementById("areaWidth");
-    const lengthInput = document.getElementById("areaLength");
-    const swathInput = document.getElementById("areaSwath");
-    const nameInput = document.getElementById("areaNameInput");
-    if (widthInput && Number.isFinite(area.width_m)) widthInput.value = area.width_m;
-    if (lengthInput && Number.isFinite(area.height_m)) lengthInput.value = area.height_m;
-    if (swathInput && Number.isFinite(area.swath_m)) swathInput.value = area.swath_m;
-    if (nameInput && area.name) nameInput.value = area.name;
-  }
-  openModal("workAreaModal");
-  previewWorkArea();
-}
-
-function closeWorkArea() {
-  if (areaPreviewLayer) areaPreviewLayer.setLatLngs([]);
-  closeModal("workAreaModal");
-}
-
-function saveWorkArea() {
-  const form = areaForm();
-  showToast("Saving work area…");
-  fetch(`${baseURL}/api/areas/rect`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: form.name,
-      width_m: form.width,
-      height_m: form.length,
-      swath_m: form.swath,
-    }),
-  }).then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-    .then(({ ok, data }) => {
-      if (!ok) throw new Error(data.error || "Could not set the work area");
-      window.activeWorkArea = data.area;
-      loadedAreaId = data.area.id;
-      const areaPoints = data.area.map_polygon || [];
-      workAreaLayer.setLatLngs(areaPoints);
-      if (areaPoints.length >= 3 && leafletMap) {
-        leafletMap.fitBounds(workAreaLayer.getBounds(), { padding: [24, 24], maxZoom: 18 });
-      }
-      closeWorkArea();
-      updateAreaSummary(data.area);
-      showToast(`Work area “${data.area.name}” set · ${form.width} × ${form.length} m, centred on the rover`);
-    })
-    .catch((error) => showToast(error.message));
-}
-
-function updateAutoProgressUI(prog) {
-  if (autoProgressText) {
-    let text = "Idle";
-    if (prog.status === "fault") {
-      text = `Fault · ${prog.fault || prog.message || "mission stopped"}`;
-    } else if (prog.phase && prog.phase !== "idle") {
-      const bits = [String(prog.phase).toUpperCase()];
-      if (prog.total_strips) bits.push(`${prog.strip}/${prog.total_strips}`);
-      bits.push(`${Math.round(prog.coverage_pct || 0)}%`);
-      if (Array.isArray(prog.incomplete_strips) && prog.incomplete_strips.length) {
-        bits.push(`skipped ${prog.incomplete_strips.length}`);
-      }
-      text = bits.join(" · ");
-    }
-    autoProgressText.innerText = text.toUpperCase();
-    autoProgressText.title = [prog.message, prog.soil_checked_at
-      ? `Last soil probe: ${prog.soil_state} at ${prog.soil_checked_at}` : ""]
-      .filter(Boolean).join(" · ");
-  }
-  if (autoProgressFill) {
-    autoProgressFill.style.width = `${prog.coverage_pct || 0}%`;
-  }
-  if (missionPercent) missionPercent.innerText = `${Math.round(prog.coverage_pct || 0)}%`;
-}
-
 function updateSensorUI(isDeployed) {
   const sensorStatus = document.getElementById("sensorStatus");
   const sensorBtn = document.getElementById("sensorDeployBtn");
@@ -839,23 +642,6 @@ function updatePumpUI(isActive) {
     } else {
       pumpStatus.innerText = "OFF ⏹️";
       pumpBtn.classList.remove("active");
-    }
-  }
-}
-
-function updateAutoUI(isAutoActive) {
-  roverAutoActive = Boolean(isAutoActive);
-  const autoStatus = document.getElementById("autoStatus");
-  const autoBtn = document.getElementById("autoModeBtn");
-  if (autoStatus && autoBtn) {
-    if (isAutoActive) {
-      autoStatus.innerText = "STOP AUTONOMY";
-      autoBtn.classList.add("active");
-      if (modeTxt) modeTxt.innerText = "AUTONOMOUS 🤖";
-    } else {
-      autoStatus.innerText = "START AUTONOMY";
-      autoBtn.classList.remove("active");
-      if (modeTxt) modeTxt.innerText = "MANUAL 🎮";
     }
   }
 }
@@ -906,27 +692,6 @@ function toggleWaterPump(action = "toggle") {
   }
 }
 
-function toggleAutoMode(action = "toggle") {
-  const willStart = action === "start" || (action !== "stop" && !roverAutoActive);
-  if (willStart && !window.activeWorkArea) {
-    showToast("Set the work area breadth and length first");
-    openWorkArea();
-    return;
-  }
-  const sent = sendWSCommand({ type: "auto_mode", action: action });
-  if (!sent) {
-    roverFetch(`${baseURL}/auto_mode?action=${action}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          updateAutoUI(data.auto_active);
-          showToast(data.auto_active ? "Autonomous mode started" : "Autonomous mode stopped");
-        } else showToast(data.error || "Auto mode failed");
-      })
-      .catch(() => showToast("Could not reach rover (auto mode)"));
-  }
-}
-
 function tiltCamera(direction) {
   const sent = sendWSCommand({ type: "camera_tilt", direction: direction });
   if (!sent) {
@@ -941,21 +706,6 @@ function tiltCamera(direction) {
         else showToast(data.error || "Camera tilt failed");
       })
       .catch(() => showToast("Could not reach rover (camera)"));
-  }
-}
-
-function updateAutoSpeed() {
-  const speed = parseInt(autoSpeedSlider.value, 10);
-  if (autoSpeedVal) autoSpeedVal.innerText = speed;
-  const sent = sendWSCommand({ type: "auto_speed", speed_pct: speed });
-  if (!sent) {
-    roverFetch(`${baseURL}/auto_speed?speed_pct=${speed}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) showToast(`Auto speed set to ${speed}%`);
-        else showToast(data.error || "Could not set auto speed");
-      })
-      .catch(() => showToast("Could not reach rover (auto speed)"));
   }
 }
 
@@ -1077,8 +827,6 @@ document.addEventListener("keydown", (event) => {
     toggleSensorDeploy();
   } else if (key === "p") {
     toggleWaterPump();
-  } else if (key === "r" || key === "x") {
-    toggleAutoMode();
   }
 });
 

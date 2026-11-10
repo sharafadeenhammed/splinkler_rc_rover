@@ -17,6 +17,10 @@ COUNTS_PER_OUTPUT_REV = PULSES_PER_MOTOR_REV * GEAR_RATIO
 # wrong: lift the rover, mark the tyre, turn it exactly once.
 TICKS_PER_WHEEL_REV = COUNTS_PER_OUTPUT_REV
 
+# Wheel geometry for odometry (metres).  Track is centre-to-centre.
+WHEEL_DIAMETER_M = 0.065
+WHEEL_TRACK_M = 0.30
+
 
 class HardwareEncoder:
     """Counts rising edges of A; direction from B's last known level."""

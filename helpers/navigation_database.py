@@ -1,16 +1,14 @@
-"""Work-area & map-origin persistence (JSON file) + local pose tracking.
+"""Map-origin persistence (JSON file) + local pose tracking.
 
 History/run/telemetry logging was removed on purpose: the rover no longer
 writes navigation events anywhere.  Only what the dashboard needs to survive
-a reboot is persisted — the saved work areas and the map origin — in a small
-atomic JSON file.
+a reboot is persisted — the map origin — in a small atomic JSON file.
 """
 
 import json
 import math
 import os
 import threading
-import time
 
 from .pose_fusion import (
     GPS_FUSION_ALPHA,
@@ -29,11 +27,11 @@ STORE_PATH = os.environ.get(
     os.path.join(os.path.dirname(__file__), "..", "work_areas.json"),
 )
 
-_EMPTY_STORE = {"next_area_id": 1, "map_origin": None, "areas": []}
+_EMPTY_STORE = {"map_origin": None}
 
 
 class NavigationDatabase:
-    """Tiny atomic JSON store for work areas + map origin."""
+    """Tiny atomic JSON store for the map origin."""
 
     def __init__(self, path=STORE_PATH):
         self.path = os.path.abspath(path)
@@ -44,15 +42,15 @@ class NavigationDatabase:
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            if not isinstance(data, dict) or not isinstance(data.get("areas"), list):
+            if not isinstance(data, dict):
                 raise ValueError("unexpected store shape")
-            data.setdefault("next_area_id", 1)
-            data.setdefault("map_origin", None)
-            return data
+            # Older stores also carried saved work areas; they are ignored now
+            # and dropped on the next write.
+            return {"map_origin": data.get("map_origin")}
         except FileNotFoundError:
             return json.loads(json.dumps(_EMPTY_STORE))
         except (ValueError, TypeError, OSError) as exc:
-            print(f"⚠️ work area store unreadable ({exc}); starting empty")
+            print(f"⚠️ navigation store unreadable ({exc}); starting empty")
             return json.loads(json.dumps(_EMPTY_STORE))
 
     def _flush_locked(self):
@@ -63,122 +61,6 @@ class NavigationDatabase:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, self.path)
-
-    # ── work areas ─────────────────────────────────────────────────────
-
-    @staticmethod
-    def _new_area(area_id, name, points, map_points, origin, extra=None):
-        clean = [[float(p[0]), float(p[1])] for p in points]
-        min_x = min(p[0] for p in clean)
-        max_x = max(p[0] for p in clean)
-        min_y = min(p[1] for p in clean)
-        max_y = max(p[1] for p in clean)
-        area = {
-            "id": area_id,
-            "name": str(name or "Work area"),
-            "min_x": min_x,
-            "min_y": min_y,
-            "max_x": max_x,
-            "max_y": max_y,
-            "polygon": clean,
-            "map_polygon": [[float(p[0]), float(p[1])] for p in (map_points or [])],
-            "origin_lat": float(origin[0]) if origin else None,
-            "origin_lon": float(origin[1]) if origin else None,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "active": 1,
-        }
-        area.update(extra or {})
-        return area
-
-    def _insert_locked(self, area):
-        for other in self._data["areas"]:
-            other["active"] = 0
-        area["id"] = self._data["next_area_id"]
-        self._data["next_area_id"] += 1
-        self._data["areas"].append(area)
-        self._flush_locked()
-        return area
-
-    def save_area(self, name, min_x, min_y, max_x, max_y):
-        min_x, max_x = sorted((float(min_x), float(max_x)))
-        min_y, max_y = sorted((float(min_y), float(max_y)))
-        if min_x == max_x or min_y == max_y:
-            raise ValueError("A work area must have non-zero width and height")
-        rectangle = [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]]
-        with self.lock:
-            return self._insert_locked(self._new_area(0, name, rectangle, None, None))
-
-    def save_polygon_area(self, name, points, map_points=None, origin=None):
-        # Kept for areas stored before the coordinate-based work area existed.
-        """Save local metre points and optional geographic map coordinates."""
-        clean = []
-        for point in points:
-            if not isinstance(point, (list, tuple)) or len(point) != 2:
-                raise ValueError("Each polygon point must contain x and y")
-            clean.append([float(point[0]), float(point[1])])
-        if len(clean) < 3:
-            raise ValueError("Draw at least three points for the work area")
-        min_x = min(p[0] for p in clean)
-        max_x = max(p[0] for p in clean)
-        min_y = min(p[1] for p in clean)
-        max_y = max(p[1] for p in clean)
-        if min_x == max_x or min_y == max_y:
-            raise ValueError("The work area must have width and height")
-        if map_points is not None and len(map_points) != len(clean):
-            raise ValueError("Map points must match boundary points")
-        with self.lock:
-            return self._insert_locked(self._new_area(0, name, clean, map_points, origin))
-
-    def save_rect_area(self, name, center, width_m, height_m, swath_m,
-                       points, map_points, origin):
-        """Work area defined by a centre coordinate and two side lengths.
-
-        `points` are the local metre corners and `map_points` their lat/lon;
-        the rectangle itself is kept so the dashboard can reopen the exact
-        values the user typed, even after the map origin moves.
-        """
-        clean = [[float(point[0]), float(point[1])] for point in points]
-        if len(clean) < 3:
-            raise ValueError("The work area needs four corners")
-        width_m = float(width_m)
-        height_m = float(height_m)
-        if not (0.5 <= width_m <= 100.0 and 0.5 <= height_m <= 100.0):
-            raise ValueError("Work area sides must be 0.5-100 m")
-        if center is not None and (not isinstance(center, (list, tuple)) or len(center) != 2):
-            raise ValueError("Work area centre must be a latitude/longitude pair")
-        extra = {
-            "kind": "rect",
-            # None for a size-only area: it is centred on the rover at run time.
-            "center_lat": float(center[0]) if center else None,
-            "center_lon": float(center[1]) if center else None,
-            "width_m": width_m,
-            "height_m": height_m,
-            "swath_m": float(swath_m) if swath_m else None,
-        }
-        with self.lock:
-            return self._insert_locked(
-                self._new_area(0, name, clean, map_points, origin, extra)
-            )
-
-    def get_area(self, area_id):
-        with self.lock:
-            for area in self._data["areas"]:
-                if area["id"] == int(area_id):
-                    return area
-        return None
-
-    def list_areas(self):
-        with self.lock:
-            return list(reversed(self._data["areas"]))
-
-    def active_area(self):
-        with self.lock:
-            for area in reversed(self._data["areas"]):
-                if area.get("active"):
-                    return area
-        return None
-
-    # ── map origin ─────────────────────────────────────────────────────
 
     def save_map_origin(self, latitude, longitude):
         origin = [float(latitude), float(longitude)]
@@ -208,20 +90,7 @@ class PoseTracker:
         self.origin_lon = None
         self._gps_position_active = False
         self._gps_heading_active = False
-        self._gps_heading_enabled = True
         self._fusion_note = "odometry"
-
-    def set_gps_heading_blend(self, enabled=True):
-        """Allow or block GPS course from pulling the heading around.
-
-        Autonomous following closes its turns on the gyro and measures
-        cross-track error against that heading, so a course blend fighting it
-        mid-strip makes the rover weave.  Position fusion stays active.
-        """
-        with self.lock:
-            self._gps_heading_enabled = bool(enabled)
-            if not enabled:
-                self._gps_heading_active = False
 
     def set_map_origin(self, latitude, longitude):
         with self.lock:
@@ -267,7 +136,7 @@ class PoseTracker:
         self._gps_position_active = True
         self._fusion_note = "gps_encoders_imu"
 
-        if self._gps_heading_enabled and gps_heading_usable(gps):
+        if gps_heading_usable(gps):
             course_rad = course_to_heading_rad(gps["course_deg"])
             self.heading_rad = angle_lerp(self.heading_rad, course_rad, GPS_HEADING_BETA)
             self._gps_heading_active = True
