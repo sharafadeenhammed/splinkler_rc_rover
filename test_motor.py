@@ -1,7 +1,7 @@
-from helpers import motor_controls
+from helpers.motor_controls import _drive_forward
 
 
 
 
 while True:
-  motor_controls._drive_forward(1)
+  _drive_forward(1)
