@@ -41,7 +41,7 @@ class PINOUT:
   # PWM'd HERE while the four IN pins only pick direction.  The ENA/ENB
   # jumper caps on the driver board must be REMOVED, otherwise the enables
   # are tied HIGH and the motors run at full speed regardless of software.
-  ENA = PIN7   # left-motor speed PWM  (BCM 4)
+  ENA = PIN19   # left-motor speed PWM  (BCM 4)
   ENB = PIN38  # right-motor speed PWM (BCM 20)
 
   # JGB37-520 encoder outputs (BCM numbering).
