@@ -37,8 +37,8 @@ def normalize_angle_rad(angle):
 def course_to_heading_rad(course_deg):
     """NMEA true course (0° = north, clockwise) → world heading (0° = east, CCW).
 
-    The pose, the planner and the dashboard's map all work in the local ENU
-    frame (x east, y north), where angles run counter-clockwise from +x.  A
+    The pose and the dashboard's map work in the local ENU frame (x east,
+    y north), where angles run counter-clockwise from +x.  A
     GPS course is a compass bearing, so it has to be turned a quarter turn the
     other way before it can be used as a heading.
     """

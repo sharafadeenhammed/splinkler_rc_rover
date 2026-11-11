@@ -52,23 +52,28 @@ Problems are logged to the browser console prefixed `📹`. A healthy stream log
 `WebRTC H.264 stream live.`
 
 Camera only runs while someone watches: `sourceOnDemand: true` with
-`sourceOnDemandCloseAfter: 10s`, so the encoder is idle when the dashboard is
+`sourceOnDemandCloseAfter: 15s`, so the encoder is idle when the dashboard is
 closed.
 
 ## Tuning
 
 In `deploy/mediamtx.yml`, per path:
 
-- `rpiCameraWidth` / `rpiCameraHeight` — default 640×480
-- `rpiCameraFPS` — default 15
-- `rpiCameraBitrate` — default 1 Mbit/s (≈1.2 Mbps over the air)
-- `rpiCameraIDRPeriod` — keyframe interval in frames (15 = 1 s, fast joins)
+- `rpiCameraWidth` / `rpiCameraHeight` — 320×240
+- `rpiCameraFPS` — 8
+- `rpiCameraBitrate` — 400 kbit/s
+- `rpiCameraIDRPeriod` — keyframe interval in frames (8 = 1 s at 8 fps, fast joins)
+
+These are deliberately low for the Zero W's single core; raise them only after
+checking `top` while streaming.
 
 After editing, `sudo systemctl restart mediamtx`.
 
 ## Verify without a browser
 
 ```bash
-ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/rover    # if ffmpeg is installed
-top -b -n1 | head -n12                                    # mediamtx CPU while streaming
+top -b -n1 | head -n12    # mediamtx CPU while streaming
 ```
+
+RTSP is disabled in `deploy/mediamtx.yml`. To use `ffplay -rtsp_transport tcp
+rtsp://127.0.0.1:8554/rover`, set `rtsp: true` and restart `mediamtx` first.

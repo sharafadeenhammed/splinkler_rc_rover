@@ -63,11 +63,11 @@ fi
 LAN_IP="$(hostname -I | awk '{print $1}')"
 cat <<EOF
 
-Done — the dashboard camera tile now uses WebRTC and falls back to M-JPEG.
+Done — the dashboard camera tile now uses WebRTC (H.264), with no MJPEG fallback.
 
   WHEP endpoint : http://${LAN_IP}:8889/rover/whep
   Built-in page : http://${LAN_IP}:8889/rover
-  RTSP (local)  : rtsp://127.0.0.1:8554/rover
+  RTSP (local)  : disabled — set 'rtsp: true' in deploy/mediamtx.yml to use it
 
 Ports 8889/tcp (signalling) and 8189/udp (media) must be reachable from the
 browser. Check logs with: journalctl -u mediamtx -f

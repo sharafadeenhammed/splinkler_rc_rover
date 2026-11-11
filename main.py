@@ -30,6 +30,7 @@ from helpers.hmc5883l import (
 )
 from helpers.pose_fusion import course_to_heading_rad, gps_heading_usable
 from helpers import motor_controls
+from helpers import auto_controller
 from helpers.gps_controller import get_gps
 from helpers.navigation_database import DB, PoseTracker
 from helpers.encoder_controller import (
@@ -162,6 +163,10 @@ class WSClientWrapper:
 
 def handle_motor(speed, direction):
     global motor_status
+    # A manual drive command is an operator override: end any sweep first so
+    # the auto thread cannot fight the new command.
+    if auto_controller.is_active():
+        auto_controller.stop("manual drive override")
     speed_percent = max(0, min(100, int(speed or 0)))
     duty_cycle = speed_percent / 100.0
 
@@ -237,6 +242,32 @@ def handle_ultrasonic(action=None):
         "status": "ENABLED 🔊" if enabled else "DISABLED 🔇"
     }
 
+def handle_auto_mode(action=None, params=None, supplied_pin=None):
+    """Start/stop/query the autonomous sweep (the thread lives in auto_controller).
+
+    Starting needs the PIN when ROVER_PIN is set; stopping never does, so the
+    operator can always abort a mission.
+    """
+    action = (action or "status").strip().lower()
+    if action == "start":
+        if not _pin_ok(supplied_pin):
+            return {"success": False, "error": "PIN required"}
+        return auto_controller.start(params)
+    if action == "stop":
+        stopped = auto_controller.stop("operator stop")
+        return {"success": True, "stopped": stopped, **auto_controller.get_status()}
+    if action == "toggle":
+        if auto_controller.is_active():
+            auto_controller.stop("operator stop")
+            return {"success": True, "stopped": True, **auto_controller.get_status()}
+        if not _pin_ok(supplied_pin):
+            return {"success": False, "error": "PIN required"}
+        return auto_controller.start(params)
+    if action == "status":
+        return {"success": True, **auto_controller.get_status()}
+    return {"success": False, "error": f"unknown auto action '{action}'"}
+
+
 def handle_camera_tilt(direction):
     global camera_current_angle
     step_degrees = 15
@@ -282,6 +313,7 @@ def get_telemetry_payload():
     payload["gps"] = get_gps().get()
     payload["memory"] = read_meminfo()
     payload["pin_required"] = bool(ROVER_PIN)
+    payload["auto"] = auto_controller.get_status()
     payload["success"] = True
     return payload
 
@@ -316,6 +348,13 @@ def apply_navigation_origin(latitude, longitude, source="manual"):
 def emergency_stop_rover(reason="user disconnected"):
     global motor_status, sensor_servo_deployed
     print(f"🛑 [SAFETY FAILSAFE] Stopping all rover actions ({reason})...")
+    # 0. End an autonomous sweep (unless configured to survive a disconnect)
+    try:
+        if auto_controller.is_active() and auto_controller.AUTO_STOP_ON_DISCONNECT:
+            auto_controller.stop(f"failsafe: {reason}")
+    except Exception as e:
+        print(f"⚠️ Failsafe auto mode stop error: {e}")
+
     # 1. Stop motors
     try:
         stop()
@@ -532,6 +571,11 @@ def ws_handler(ws):
                 elif cmd_type == "ultrasonic":
                     res = handle_ultrasonic(data.get("action"))
                     response.update(res)
+                elif cmd_type == "auto_mode":
+                    res = handle_auto_mode(
+                        data.get("action"), data.get("params"), data.get("pin")
+                    )
+                    response.update(res)
                 elif cmd_type == "get_status":
                     pass
                 elif cmd_type == "ping":
@@ -596,6 +640,28 @@ def control_ultrasonic():
     res = handle_ultrasonic(action)
     broadcast_telemetry()
     return jsonify({"success": True, **res}), 200
+
+@app.route('/auto_mode', methods=['GET', 'POST'])
+def control_auto_mode():
+    """Start/stop the sweep.  JSON body: {"action": ..., "params": {...}}
+    (flat parameter keys next to "action" are accepted too)."""
+    payload = request.get_json(silent=True) or {}
+    action = request.args.get('action') or payload.get('action')
+    params = payload.get('params')
+    if params is None and payload:
+        params = {
+            key: payload[key]
+            for key in auto_controller.DEFAULT_PARAMS
+            if key in payload
+        }
+    result = handle_auto_mode(action, params or None)
+    broadcast_telemetry()
+    if result.get("error") == "PIN required":
+        return jsonify(result), 401
+    if not result.get("success"):
+        return jsonify(result), 400
+    return jsonify(result), 200
+
 
 @app.route('/deploy_sensor', methods=['GET', 'POST'])
 @pin_required

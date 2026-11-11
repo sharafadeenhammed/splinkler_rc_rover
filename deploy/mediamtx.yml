@@ -4,8 +4,8 @@
 #   Pi camera (libcamera) -> BCM2835 hardware H.264 encoder -> RTP/SRTP -> browser
 #
 # The camera is owned by MediaMTX (source: rpiCamera), so the Flask app no
-# longer has to fork rpicam-vid for the live view; /stream (M-JPEG) is only a
-# fallback used when WebRTC cannot connect.
+# longer forks rpicam-vid for the live view.  There is no M-JPEG path: WebRTC
+# is the only way the dashboard receives video.
 #
 # Installed and started by deploy/setup_webrtc.sh (systemd unit:
 # deploy/mediamtx.service).  Reference: mediamtx.org/docs
@@ -25,8 +25,8 @@ rtmp: false
 srt: false
 moq: false
 
-# RTSP stays on, but loopback-only: ffplay/VLC on the Pi is the fastest way to
-# prove the encoder works without involving a browser.
+# RTSP is off by default (every listener costs RAM on the Zero W).  Enable it
+# and use loopback-only ffplay/VLC to prove the encoder works without a browser.
 rtsp: false #true
 rtspAddress: 127.0.0.1:8554
 rtspTransports: [tcp]

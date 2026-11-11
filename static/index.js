@@ -26,6 +26,12 @@ const valEncRight = document.getElementById("valEncRight");
 const compassCard = document.getElementById("compassCard");
 const headingDigits = document.getElementById("headingDigits");
 const pinInput = document.getElementById("roverPinInput");
+const modeTxt = document.getElementById("modeTxt");
+const autoStartBtn = document.getElementById("autoStartBtn");
+const autoStopBtn = document.getElementById("autoStopBtn");
+const autoStateTxt = document.getElementById("autoStateTxt");
+const autoMetaTxt = document.getElementById("autoMetaTxt");
+const autoProgressBar = document.getElementById("autoProgressBar");
 
 // Build the compass card ticks once (every 10°, majors on the cardinals).
 (function buildCompassTicks() {
@@ -480,6 +486,7 @@ function renderTelemetry(data) {
   }
 
   if (data.pump_active !== undefined) updatePumpUI(data.pump_active);
+  if (data.auto) renderAutoStatus(data.auto);
   if (data.sensor_deployed !== undefined) updateSensorUI(data.sensor_deployed);
 
   if (data.motor_status !== undefined && statusTxt) {
@@ -572,6 +579,8 @@ function notifyFromResponse(msg) {
     showToast(msg.is_deployed ? "Probe deployed" : "Probe retracted");
   } else if (cmd === "camera_tilt" && msg.current_angle != null) {
     showToast(`Camera pan ${msg.current_angle}°`);
+  } else if (cmd === "auto_mode") {
+    showToast(msg.message || (msg.stopped ? "Sweep stopped" : "Sweep updated"));
   }
 }
 
@@ -644,6 +653,135 @@ function updatePumpUI(isActive) {
       pumpBtn.classList.remove("active");
     }
   }
+}
+
+// ----------------- Auto sweep -----------------
+
+// Parameters persist locally so the same plot does not have to be retyped on
+// every mission; the server validates and clamps nothing behind these fields.
+const AUTO_PARAMS_KEY = "autoSweepParams";
+const AUTO_FIELDS = {
+  length_m: "autoLength",
+  width_m: "autoWidth",
+  row_spacing_m: "autoSpacing",
+  water_interval_m: "autoWaterEvery",
+  pump_run_seconds: "autoPumpSeconds",
+  turn_side: "autoSide",
+  moisture_dry_means: "autoDryLevel",
+};
+
+function readAutoParams() {
+  const params = {};
+  Object.entries(AUTO_FIELDS).forEach(([key, id]) => {
+    const field = document.getElementById(id);
+    if (!field) return;
+    params[key] = key === "turn_side" ? field.value : Number(field.value);
+  });
+  return params;
+}
+
+function applyAutoParams(saved) {
+  if (!saved || typeof saved !== "object") return;
+  Object.entries(AUTO_FIELDS).forEach(([key, id]) => {
+    const field = document.getElementById(id);
+    if (!field || saved[key] === undefined || saved[key] === null) return;
+    field.value = String(saved[key]);
+  });
+}
+
+try {
+  applyAutoParams(JSON.parse(localStorage.getItem(AUTO_PARAMS_KEY) || "null"));
+} catch (err) {
+  console.warn("[Auto] Could not restore sweep parameters:", err);
+}
+
+document.querySelectorAll(".auto-field input, .auto-field select").forEach((field) => {
+  field.addEventListener("change", () => {
+    try {
+      localStorage.setItem(AUTO_PARAMS_KEY, JSON.stringify(readAutoParams()));
+    } catch (err) {
+      console.warn("[Auto] Could not save sweep parameters:", err);
+    }
+  });
+});
+
+function renderAutoStatus(auto) {
+  if (!auto) return;
+  const active = !!auto.active;
+  const state = String(auto.state || (active ? "RUNNING" : "IDLE"));
+
+  if (autoStateTxt) {
+    autoStateTxt.innerText = state;
+    autoStateTxt.className = `auto-state ${state.toLowerCase()}`;
+  }
+  if (modeTxt) {
+    modeTxt.innerText = active ? "AUTO" : "MANUAL";
+    modeTxt.classList.toggle("auto", active);
+  }
+  if (autoProgressBar) {
+    const pct = Math.max(0, Math.min(100, Number(auto.progress_pct) || 0));
+    autoProgressBar.style.width = `${pct}%`;
+  }
+  if (autoStartBtn) autoStartBtn.disabled = active;
+  if (autoStopBtn) autoStopBtn.disabled = !active;
+
+  if (autoMetaTxt) {
+    if (active) {
+      const bits = [];
+      if (auto.total_rows) bits.push(`Row ${auto.row}/${auto.total_rows}`);
+      bits.push(`${Math.round(Number(auto.progress_pct) || 0)}%`);
+      if (Number.isFinite(Number(auto.heading_error_deg))) {
+        bits.push(`err ${Number(auto.heading_error_deg).toFixed(1)}°`);
+      }
+      if (auto.last_moisture && auto.last_moisture !== "not checked") {
+        bits.push(`soil ${auto.last_moisture}`);
+      }
+      if (auto.watered_count) bits.push(`${auto.watered_count} watered`);
+      autoMetaTxt.innerText = bits.join(" · ");
+      autoMetaTxt.title = auto.message || "";
+    } else {
+      autoMetaTxt.innerText = auto.fault || auto.message || "No sweep running";
+      autoMetaTxt.title = autoMetaTxt.innerText;
+    }
+  }
+}
+
+function sendAutoCommand(action) {
+  const params = readAutoParams();
+  const payload = { type: "auto_mode", action: action };
+  if (action === "start") payload.params = params;
+  if (sendWSCommand(payload)) return true;
+
+  // HTTP fallback, same as the other controls when the socket is down.
+  roverFetch(`${baseURL}/auto_mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+    .then((res) => res.json())
+    .then((data) => {
+      if (!data.success) {
+        showToast(data.error || "Auto command failed");
+        return;
+      }
+      renderAutoStatus(data);
+      showToast(data.message || (action === "start" ? "Sweep started" : "Sweep stopped"));
+    })
+    .catch(() => showToast("Could not reach rover (auto mode)"));
+  return false;
+}
+
+function startAutoSweep() {
+  try {
+    localStorage.setItem(AUTO_PARAMS_KEY, JSON.stringify(readAutoParams()));
+  } catch (err) {
+    console.warn("[Auto] Could not save sweep parameters:", err);
+  }
+  sendAutoCommand("start");
+}
+
+function stopAutoSweep() {
+  sendAutoCommand("stop");
 }
 
 // ----------------- Command Handlers (WS with HTTP Fallback) -----------------

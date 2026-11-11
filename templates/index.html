@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/vendor/leaflet.css">
-  <link rel="stylesheet" href="/static/index.css?v=20261110a">
+  <link rel="stylesheet" href="/static/index.css?v=20261111b">
 </head>
 <body>
   <div class="app-shell">
@@ -20,6 +20,20 @@
         <section class="workspace-grid">
           <article class="panel camera-card"><div class="panel-head"><h3>Camera</h3><div class="camera-head-actions"><span class="live-tag" id="cameraLiveTag"><i></i> <b id="cameraStateTxt">LIVE</b></span><button class="map-btn" id="cameraToggleBtn" onclick="toggleCameraFeed()" aria-pressed="true">Stop</button></div></div><div class="video-frame"><video id="videoStream" autoplay muted playsinline></video><div class="video-off" id="cameraOff" hidden><span>Camera off</span><small>Press Start to open the feed</small></div><div class="video-overlay"><span>CAM 01</span><span id="current-angle">0</span>°</div></div><div class="camera-controls"><span>Camera pan</span><div class="camera-pan-group"><button class="camera-pan-btn" onclick="tiltCamera('left')">Turn left</button><button class="camera-pan-btn is-center" onclick="tiltCamera('center')">Center</button><button class="camera-pan-btn" onclick="tiltCamera('right')">Turn right</button></div></div></article>
           <article class="panel map-card" id="navigation"><div class="panel-head"><div><h3>Work map</h3><span class="coordinate-readout" id="poseText">0.0m, 0.0m · 0°</span></div><div class="map-head-meta"><span class="gps-readout" id="gpsText">GPS —</span><span class="map-source" id="mapCoordinateText">OpenStreetMap</span></div></div><div class="map-toolbar"><button class="map-btn" onclick="centerMapOnRover()">Center</button></div><div id="roverMap" aria-label="OpenStreetMap work area selector"></div></article>
+        </section>
+        <section class="auto-dock" id="autoDock" aria-label="Autonomous sweep">
+          <div class="auto-dock-head"><span class="manual-dock-label">Auto sweep</span><span class="control-hint compact">Rows follow the heading at Start</span><span class="auto-state" id="autoStateTxt">IDLE</span></div>
+          <div class="auto-fields">
+            <label class="auto-field">Length m<input id="autoLength" type="number" min="0.2" max="100" step="0.1" value="5"></label>
+            <label class="auto-field">Width m<input id="autoWidth" type="number" min="0.1" max="100" step="0.1" value="3"></label>
+            <label class="auto-field">Row gap m<input id="autoSpacing" type="number" min="0.05" max="10" step="0.05" value="0.5"></label>
+            <label class="auto-field">Water every m<input id="autoWaterEvery" type="number" min="0" max="100" step="0.5" value="2"></label>
+            <label class="auto-field">Pump s<input id="autoPumpSeconds" type="number" min="0" max="120" step="0.5" value="3"></label>
+            <label class="auto-field">Side<select id="autoSide"><option value="right" selected>Right</option><option value="left">Left</option></select></label>
+            <label class="auto-field">Dry =<select id="autoDryLevel"><option value="1" selected>1</option><option value="0">0</option></select></label>
+          </div>
+          <div class="auto-actions"><button class="btn btn-primary" id="autoStartBtn" onclick="startAutoSweep()">Start</button><button class="btn btn-ghost" id="autoStopBtn" onclick="stopAutoSweep()" disabled>Stop</button></div>
+          <div class="auto-progress-wrap"><div class="auto-progress"><i id="autoProgressBar"></i></div><span class="auto-meta" id="autoMetaTxt">No sweep running</span></div>
         </section>
         <section class="manual-dock" id="manualDock" aria-label="Manual drive controls">
           <div class="manual-dock-head"><span class="manual-dock-label">Manual drive</span><span class="control-hint compact">Hold buttons or WASD · Space stops</span></div>
@@ -87,6 +101,6 @@
   <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')"><div class="modal small-modal"><button class="modal-close" onclick="closeModal('imuModal')">×</button><span class="panel-kicker">INERTIAL SENSOR</span><h2>Calibrate MPU6050</h2><p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p><div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button><button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button></div></div></div>
   <div class="toast" id="toast"></div>
   <script src="/static/vendor/leaflet.js"></script>
-  <script src="/static/index.js?v=20261110a"></script>
+  <script src="/static/index.js?v=20261111a"></script>
 </body>
 </html>

@@ -128,3 +128,49 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 .camera-pan-btn { border: 1px solid var(--line); background: #18222f; color: var(--text); height: 30px; padding: 0 11px; border-radius: 7px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .camera-pan-btn:hover { border-color: var(--cyan); color: var(--cyan); }
 .camera-pan-btn.is-center { background: rgba(57,217,208,.1); border-color: rgba(57,217,208,.4); color: var(--cyan); }
+
+/* Auto sweep dock: parameters in one row, live state and progress below. */
+.auto-dock { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(14,20,30,.98); }
+.auto-dock-head { display: flex; flex-direction: column; gap: 3px; min-width: 92px; }
+.auto-dock-head .control-hint.compact { max-width: 130px; }
+.auto-state { font: 9px 'DM Mono', monospace; letter-spacing: .1em; color: var(--muted); }
+.auto-state.drive_row, .auto-state.turn_1, .auto-state.step, .auto-state.turn_2, .auto-state.water, .auto-state.calibrate, .auto-state.avoid { color: var(--cyan); }
+.auto-state.done { color: var(--green); }
+.auto-state.error { color: var(--danger); }
+.status-pill strong.auto { color: var(--cyan); }
+.auto-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.auto-field { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 9px; letter-spacing: .04em; }
+.auto-field input, .auto-field select { width: 62px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: #0b111a; color: var(--text); font: 10px 'DM Mono', monospace; }
+.auto-field select { width: 68px; }
+.auto-field input:focus, .auto-field select:focus { outline: none; border-color: var(--cyan); }
+.auto-actions { display: flex; gap: 6px; margin-left: auto; }
+.auto-actions .btn { flex: 0 0 auto; padding: 8px 14px; font-size: 11px; }
+.auto-actions .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+.auto-progress-wrap { display: flex; flex-direction: column; gap: 4px; flex: 1 1 180px; min-width: 140px; }
+.auto-progress { height: 5px; border: 1px solid var(--line); border-radius: 99px; background: #0b111a; overflow: hidden; }
+.auto-progress i { display: block; width: 0; height: 100%; background: var(--cyan); transition: width .3s; }
+.auto-meta { overflow: hidden; color: var(--muted); font: 9px 'DM Mono', monospace; white-space: nowrap; text-overflow: ellipsis; }
+@media (max-width: 1050px) { .auto-progress-wrap { flex-basis: 100%; } }
+@media (max-width: 760px) {
+  .auto-dock { gap: 8px; padding: 8px; }
+  .auto-dock-head { flex-direction: row; align-items: center; justify-content: space-between; width: 100%; }
+  .auto-dock-head .control-hint.compact { display: none; }
+  .auto-fields { order: 3; width: 100%; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+  .auto-field { flex: 0 0 auto; }
+  .auto-actions { order: 2; margin-left: auto; }
+  .auto-progress-wrap { order: 4; flex-basis: 100%; min-width: 0; }
+}
+
+/* Camera pan: thumb-sized buttons that stay under the video at every width.
+   The group fills the card's spare width so all three are reachable one-handed. */
+.camera-controls { margin-top: 10px; gap: 8px; align-items: center; }
+.camera-controls > span { flex: 0 0 auto; font-size: 11px; }
+.camera-pan-group { flex: 1 1 auto; justify-content: flex-end; gap: 8px; min-width: 0; }
+.camera-pan-btn { flex: 1 1 0; min-width: 0; max-width: 220px; height: 46px; padding: 0 16px; border-radius: 10px; font-size: 13px; font-weight: 700; }
+.camera-pan-btn:active { transform: translateY(1px); }
+@media (max-width: 760px) {
+  .camera-controls { flex-wrap: nowrap; margin-top: 8px; }
+  .camera-controls > span { display: none; }
+  .camera-pan-group { width: 100%; gap: 6px; }
+  .camera-pan-btn { height: 48px; padding: 0 10px; font-size: 12px; max-width: none; }
+}
