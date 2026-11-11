@@ -2,6 +2,7 @@
 env
 __pycache__
 /__pycache__
+/bin
 .vscode
 .env
 .venv
