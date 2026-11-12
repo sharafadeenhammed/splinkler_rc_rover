@@ -667,7 +667,6 @@ const AUTO_FIELDS = {
   water_interval_m: "autoWaterEvery",
   pump_run_seconds: "autoPumpSeconds",
   turn_side: "autoSide",
-  moisture_dry_means: "autoDryLevel",
 };
 
 function readAutoParams() {
@@ -737,6 +736,7 @@ function renderAutoStatus(auto) {
         bits.push(`soil ${auto.last_moisture}`);
       }
       if (auto.watered_count) bits.push(`${auto.watered_count} watered`);
+      if (auto.ultrasonic_active === false) bits.push("obstacle sensor off");
       autoMetaTxt.innerText = bits.join(" · ");
       autoMetaTxt.title = auto.message || "";
     } else {

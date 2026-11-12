@@ -454,9 +454,9 @@ class _Sweep:
                     f"turn timeout {math.degrees(error):.0f} deg short of target"
                 )
 
-            # Positive error means the nose is CCW (left) of the target, so
-            # we pivot CW (right): right wheel forward, left wheel reverse.
-            # drive_tank(-speed, +speed) → left reverse, right forward → CW.
+            # Positive error means the target is CCW (left) of the nose, so
+            # pivot CCW: left wheel reverse, right wheel forward.
+            # drive_tank(-speed, +speed) does that; direction flips it.
             direction = 1.0 if error > 0.0 else -1.0
             speed = self.params["turn_speed"]
             motors.drive_tank(-direction * speed, direction * speed)

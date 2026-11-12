@@ -30,7 +30,6 @@
             <label class="auto-field">Water every m<input id="autoWaterEvery" type="number" min="0" max="100" step="0.5" value="2"></label>
             <label class="auto-field">Pump s<input id="autoPumpSeconds" type="number" min="0" max="120" step="0.5" value="3"></label>
             <label class="auto-field">Side<select id="autoSide"><option value="right" selected>Right</option><option value="left">Left</option></select></label>
-            <label class="auto-field">Dry =<select id="autoDryLevel"><option value="1" selected>1</option><option value="0">0</option></select></label>
           </div>
           <div class="auto-actions"><button class="btn btn-primary" id="autoStartBtn" onclick="startAutoSweep()">Start</button><button class="btn btn-ghost" id="autoStopBtn" onclick="stopAutoSweep()" disabled>Stop</button></div>
           <div class="auto-progress-wrap"><div class="auto-progress"><i id="autoProgressBar"></i></div><span class="auto-meta" id="autoMetaTxt">No sweep running</span></div>
@@ -101,6 +100,6 @@
   <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')"><div class="modal small-modal"><button class="modal-close" onclick="closeModal('imuModal')">×</button><span class="panel-kicker">INERTIAL SENSOR</span><h2>Calibrate MPU6050</h2><p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p><div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button><button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button></div></div></div>
   <div class="toast" id="toast"></div>
   <script src="/static/vendor/leaflet.js"></script>
-  <script src="/static/index.js?v=20261111a"></script>
+  <script src="/static/index.js?v=20261111b"></script>
 </body>
 </html>

@@ -68,8 +68,6 @@ Notes:
 ```
 main.py                    Flask app: HTTP API, WebSocket control, telemetry,
                            background sensor / navigation / broadcast threads
-auto_controller.py         Auto sweep thread: state machine, watering,
-                           obstacle handling, start/stop/status API
 bt.py                      BLE GATT peripheral for provisioning (root)
 index.html                 Standalone Web Bluetooth provisioning dashboard
 templates/index.html       Rover dashboard shell
@@ -77,6 +75,8 @@ static/index.js            Dashboard logic: drive, map, WebRTC, telemetry
 static/index.css           Dashboard styling
 static/vendor/             Leaflet bundle
 helpers/                   Hardware drivers and navigation maths
+  auto_controller.py       Auto sweep thread: state machine, watering,
+                           obstacle handling, start/stop/status API
   auto_plan.py             Pure row/turn targets, steering and sweep maths
   motor_controls.py        L298N drive, tank/arcade helpers
   encoder_controller.py    Encoder counting and wheel geometry
@@ -280,8 +280,7 @@ curl -X POST http://<pi>:5000/auto_mode \
   -H 'Content-Type: application/json' \
   -d '{"action": "start", "params": {"length_m": 6, "width_m": 3,
        "row_spacing_m": 0.5, "turn_side": "right", "water_interval_m": 2,
-       "moisture_dry_means": 1, "pump_run_seconds": 3,
-       "drive_speed": 0.85, "turn_speed": 0.9}}'
+       "pump_run_seconds": 3, "drive_speed": 0.85, "turn_speed": 0.9}}'
 
 curl -X POST http://<pi>:5000/auto_mode -d '{"action": "stop"}' -H 'Content-Type: application/json'
 ```
