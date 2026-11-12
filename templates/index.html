@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/vendor/leaflet.css">
-  <link rel="stylesheet" href="/static/index.css?v=20261112c">
+  <link rel="stylesheet" href="/static/index.css?v=20261112d">
 </head>
 <body>
   <div class="app-shell">
@@ -18,7 +18,7 @@
 
       <main class="dashboard" id="overview">
         <section class="workspace-grid">
-          <article class="panel camera-card"><div class="panel-head"><h3>Camera</h3><div class="camera-head-actions"><span class="live-tag" id="cameraLiveTag"><i></i> <b id="cameraStateTxt">LIVE</b></span><button class="map-btn" id="cameraToggleBtn" onclick="toggleCameraFeed()" aria-pressed="true">Stop</button></div></div><div class="video-frame"><video id="videoStream" autoplay muted playsinline></video><div class="video-off" id="cameraOff" hidden><span>Camera off</span><small>Press Start to open the feed</small></div><div class="video-overlay"><span>CAM 01</span><span id="current-angle">0</span>°</div></div><div class="camera-controls"><span>Camera pan</span><div class="camera-pan-group"><button class="camera-pan-btn" onclick="tiltCamera('left')">Turn left</button><button class="camera-pan-btn is-center" onclick="tiltCamera('center')">Center</button><button class="camera-pan-btn" onclick="tiltCamera('right')">Turn right</button></div></div></article>
+          <article class="panel camera-card"><div class="panel-head"><h3>Camera</h3><div class="camera-head-actions"><span class="live-tag" id="cameraLiveTag"><i></i> <b id="cameraStateTxt">LIVE</b></span><button class="map-btn" id="cameraToggleBtn" onclick="toggleCameraFeed()" aria-pressed="true">Stop</button></div></div><div class="video-frame"><video id="videoStream" autoplay muted playsinline></video><div class="video-off" id="cameraOff"><span id="cameraOffTitle">Camera off</span><small id="cameraOffHint">Press Start to open the feed</small><button class="btn btn-primary video-off-btn" id="cameraOffBtn" onclick="retryCameraFeed()">Start camera</button></div><div class="video-overlay"><span>CAM 01</span><span id="current-angle">0</span>°</div></div><div class="camera-controls"><span>Camera pan</span><div class="camera-pan-group"><button class="camera-pan-btn" onclick="tiltCamera('left')">Turn left</button><button class="camera-pan-btn is-center" onclick="tiltCamera('center')">Center</button><button class="camera-pan-btn" onclick="tiltCamera('right')">Turn right</button></div></div></article>
           <article class="panel map-card" id="navigation"><div class="panel-head"><div><h3>Work map</h3><span class="coordinate-readout" id="poseText">0.0m, 0.0m · 0°</span><button class="map-btn map-center-btn" onclick="centerMapOnRover()">Center</button></div><div class="map-head-meta"><span class="gps-readout" id="gpsText">GPS —</span><span class="map-source" id="mapCoordinateText">OpenStreetMap</span></div></div><div id="roverMap" aria-label="OpenStreetMap work area selector"></div></article>
         </section>
         <section class="auto-dock" id="autoDock" aria-label="Autonomous sweep">
@@ -100,6 +100,6 @@
   <div class="modal-backdrop" id="imuModal" onclick="if(event.target===this) closeModal('imuModal')"><div class="modal small-modal"><button class="modal-close" onclick="closeModal('imuModal')">×</button><span class="panel-kicker">INERTIAL SENSOR</span><h2>Calibrate MPU6050</h2><p class="muted">Place the rover on a stable surface and keep it completely still during calibration.</p><div class="calibration-note">The MPU6050 provides relative yaw. It improves straight-line control but does not provide absolute GPS coordinates.</div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('imuModal')">Cancel</button><button class="btn btn-primary" onclick="calibrateIMU()">Calibrate now</button></div></div></div>
   <div class="toast" id="toast"></div>
   <script src="/static/vendor/leaflet.js"></script>
-  <script src="/static/index.js?v=20261112c"></script>
+  <script src="/static/index.js?v=20261112d"></script>
 </body>
 </html>

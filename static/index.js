@@ -148,6 +148,9 @@ let webrtcVideoTimer = null;
 // off closes the WHEP session, and MediaMTX's sourceOnDemand then shuts the
 // Pi camera and hardware encoder down ~15 s later.
 let cameraFeedOn = true;
+// True only once a decoded frame is actually playing, so the placeholder can
+// cover the black <video> while WHEP negotiates or the Pi camera boots.
+let cameraPlaying = false;
 // WHEP hands back a session URL in the Location header; DELETE ends the session
 // so MediaMTX stops the source now instead of noticing the reader is gone.
 let whepSessionUrl = null;
@@ -161,12 +164,25 @@ function setCameraUi() {
     button.textContent = cameraFeedOn ? "Stop" : "Start";
     button.setAttribute("aria-pressed", cameraFeedOn ? "true" : "false");
   }
-  if (tag) tag.classList.toggle("off", !cameraFeedOn);
-  if (tagTxt) tagTxt.textContent = cameraFeedOn ? "LIVE" : "OFF";
-  if (off) off.hidden = cameraFeedOn;
+  if (tag) tag.classList.toggle("off", !cameraPlaying);
+  if (tagTxt) tagTxt.textContent = cameraPlaying ? "LIVE" : (cameraFeedOn ? "WAIT" : "OFF");
+  if (off) {
+    off.hidden = cameraPlaying;
+    const title = document.getElementById("cameraOffTitle");
+    const hint = document.getElementById("cameraOffHint");
+    const overlayBtn = document.getElementById("cameraOffBtn");
+    if (title) title.textContent = cameraFeedOn ? "Connecting camera" : "Camera off";
+    if (hint) {
+      hint.textContent = cameraFeedOn
+        ? "Waiting for the video stream"
+        : "Press Start to open the feed";
+    }
+    if (overlayBtn) overlayBtn.textContent = cameraFeedOn ? "Retry" : "Start camera";
+  }
 }
 
 function closeWebRTC() {
+  cameraPlaying = false;
   clearTimeout(webrtcVideoTimer);
   clearTimeout(webrtcRetryTimer);
   if (whepSessionUrl) {
@@ -203,6 +219,18 @@ function toggleCameraFeed() {
   if (cameraFeedOn) {
     stopCameraFeed("user");
     showToast("Camera feed stopped");
+  } else {
+    showToast("Opening camera feed…");
+    startCameraFeed("user start");
+  }
+}
+
+// The placeholder button means "try again", not "stop" when the feed is
+// already on but no frames have arrived yet.
+function retryCameraFeed() {
+  if (cameraFeedOn) {
+    showToast("Reconnecting camera…");
+    connectWebRTC("user retry");
   } else {
     showToast("Opening camera feed…");
     startCameraFeed("user start");
@@ -1005,7 +1033,18 @@ window.addEventListener("beforeunload", () => {
 // Camera boot: open the feed on page load, as before; the Stop button hands
 // control to the user afterwards.
 setCameraUi();
-if (videoStream) connectWebRTC("page load");
+if (videoStream) {
+  videoStream.addEventListener("playing", () => {
+    cameraPlaying = true;
+    setCameraUi();
+  });
+  videoStream.addEventListener("pause", () => {
+    if (!cameraPlaying) return;
+    cameraPlaying = false;
+    setCameraUi();
+  });
+  connectWebRTC("page load");
+}
 // Closing the tab should release the Pi camera too, not wait for a timeout.
 window.addEventListener("pagehide", closeWebRTC);
 

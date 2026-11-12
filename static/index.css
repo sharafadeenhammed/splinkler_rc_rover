@@ -93,6 +93,7 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 .video-off{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;background:#080c12;color:#8a96a6;font:11px 'DM Mono',monospace;letter-spacing:.14em;text-transform:uppercase}
 .video-off[hidden]{display:none}
 .video-off small{color:#5d6a7a;font:9px Manrope,system-ui,sans-serif;letter-spacing:.06em}
+.video-off-btn{margin-top:6px;padding:7px 15px;font-size:11px;letter-spacing:.02em;text-transform:none}
 
 /* ── Console shell: the sidebar is gone, the dashboard owns the window ── */
 .sidebar,.mobile-backdrop,.mobile-menu{display:none!important}
@@ -197,4 +198,13 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 @media (min-width: 761px) and (max-height: 820px) {
   .dashboard { grid-template-rows: minmax(280px, 1fr) auto auto auto; gap: 6px; }
   .video-frame { min-height: 120px; }
+
+  /* Sensor dock: one row of readouts beside the equipment buttons instead of
+     two stacked rows, which keeps the strip above the fold on short laptops. */
+  .bottom-dock { display: flex; align-items: center; gap: 12px; min-height: 0; padding: 6px 10px; }
+  .bottom-dock .sensor-strip { flex: 1 1 auto; gap: 14px; overflow-x: auto; }
+  .bottom-dock .sensor-strip > div { flex: none; }
+  .bottom-dock .sensor-strip small { font-size: 7px; letter-spacing: .06em; }
+  .bottom-dock .sensor-strip strong { font-size: 10px; }
+  .bottom-dock .dock-controls { flex: 0 0 auto; gap: 6px; }
 }
