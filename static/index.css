@@ -131,8 +131,8 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
 
 /* Auto sweep dock: parameters in one row, live state and progress below. */
 .auto-dock { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(14,20,30,.98); }
-.auto-dock-head { display: flex; flex-direction: column; gap: 3px; min-width: 92px; }
-.auto-dock-head .control-hint.compact { max-width: 130px; }
+.auto-dock-head { display: grid; grid-template-columns: auto auto; justify-content: start; align-items: center; gap: 2px 8px; min-width: 120px; }
+.auto-dock-head .control-hint.compact { grid-column: 1 / -1; max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .auto-state { font: 9px 'DM Mono', monospace; letter-spacing: .1em; color: var(--muted); }
 .auto-state.drive_row, .auto-state.turn_1, .auto-state.step, .auto-state.turn_2, .auto-state.water, .auto-state.calibrate, .auto-state.avoid { color: var(--cyan); }
 .auto-state.done { color: var(--green); }
@@ -173,4 +173,28 @@ html,body{height:100%;overflow:hidden}.app-shell{height:100dvh;min-height:0;over
   .camera-controls > span { display: none; }
   .camera-pan-group { width: 100%; gap: 6px; }
   .camera-pan-btn { height: 48px; padding: 0 10px; font-size: 12px; max-width: none; }
+}
+
+/* Desktop/tablet layout: four stacked bars (auto, manual, sensors) plus the
+   workspace no longer fit a fixed viewport height.  Give the workspace a floor
+   so the camera card can always show its pan controls, and let the column
+   scroll when the window is shorter than the sum of the bars. */
+@media (min-width: 761px) {
+  .dashboard {
+    grid-template-rows: minmax(320px, 1fr) auto auto auto;
+    align-content: start;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .video-frame { min-height: 150px; }
+  .camera-controls { flex: 0 0 auto; }
+  .map-center-btn { flex: 0 0 auto; }
+}
+
+/* Short laptop windows: trade some camera height for keeping the docks on
+   screen instead of hiding the sensor strip below the fold. */
+@media (min-width: 761px) and (max-height: 820px) {
+  .dashboard { grid-template-rows: minmax(280px, 1fr) auto auto auto; gap: 6px; }
+  .video-frame { min-height: 120px; }
 }
